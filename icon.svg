@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Верхний ряд: чёрный квадрат + оранжевый круг -->
+  <rect x="6" y="6" width="22" height="22" rx="3" ry="3" fill="#1a1a1a"/>
+  <circle cx="47" cy="17" r="11" fill="#e8722a"/>
+
+  <!-- Нижний ряд: два чёрных квадрата с закруглёнными краями -->
+  <rect x="6" y="36" width="22" height="22" rx="3" ry="3" fill="#1a1a1a"/>
+  <rect x="36" y="36" width="22" height="22" rx="3" ry="3" fill="#1a1a1a"/>
+</svg>

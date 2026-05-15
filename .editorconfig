@@ -1,0 +1,25 @@
+root = true
+
+[*.cs]
+charset = utf-8
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+
+# C# code style
+csharp_new_line_before_open_brace = all
+csharp_preferred_modifier_order = public, private, protected, internal, static, readonly, sealed, abstract, virtual, override, async, extern, unsafe, volatile, new:warning
+csharp_style_var_for_built_in_types = true:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = false:suggestion
+
+# Nullable/using
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+
+# Usings
+dotnet_sort_system_directives_first = true
+
+# File headers
+file_header_template = Licensed under the MIT license.

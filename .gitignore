@@ -1,0 +1,140 @@
+# .NET build artifacts
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.userprefs
+*.psess
+*.vsp
+*.vspx
+*.pidb
+*.svclog
+*.scc
+
+# Rider/VSCode/VS
+.idea/
+.vscode/
+.vs/
+
+# Logs
+*.log
+
+# Publish outputs and distributable artifacts
+publish/
+publish-mac/
+publish-mac-x64/
+publish-*/
+dist/
+MetadataDel.Cli/bin/
+MetadataDel.Core/bin/
+MetadataDel.Cli/obj/
+MetadataDel.Core/obj/
+installer/msi/PublishFiles.wxs
+installer/MetadataDel-Setup-*.exe
+installer/*.msi
+*.zip
+!MetadataDel.Cli/tools/win/exiftool_files/Licenses_Strawberry_Perl.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.dmg
+*.pkg
+*.app/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local .NET SDK (repo-local)
+.dotnet/
+
+# Node/Web artifacts (if web assets are restored locally)
+node_modules/
+Landing/node_modules/
+
+# Exiftool large sources (keep only what we ship)
+Exiftool/
+!MetadataDel.Cli/tools/
+!publish/tools/
+!publish-mac/tools/
+
+# Build configuration variants
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+Bld/
+artifacts/
+
+# Visual Studio caches and state
+*.rsuser
+*.sln.docstates
+*.VC.db
+*.opendb
+
+# NuGet
+packages/
+!**/packages/build/
+!**/packages/repositories.config
+*.nupkg
+*.snupkg
+.nuget/
+
+# Test results and coverage
+TestResult*/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+*.coveragejson
+coverage/
+
+# ReSharper / Rider / analyzers
+_ReSharper*/
+*.DotSettings.user
+.sonarqube/
+.scannerwork/
+
+# Publishing profiles
+*.pubxml
+*.pubxml.user
+*.publishproj
+
+# Certificates and secrets
+*.pfx
+*.p12
+*.key
+*.pem
+*.crt
+*.cer
+*.jks
+*.keystore
+
+# Crash and profiling artifacts
+*.dmp
+*.iobj
+*.ipdb
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Environment files (if used)
+.env
+.env.local
+.env.*.local
+
+# MetadataDel local outputs
+*.MetadataDel-ошибка.txt
+*.MetadataDel.cleaned.pdf
+
+# Generic cache folders
+.cache/

@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?ifndef ProductVersion?>
+<?define ProductVersion=1.0.0?>
+<?endif?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="MetadataDel"
+    Language="1049"
+    Version="$(var.ProductVersion)"
+    Manufacturer="MetadataDel"
+    UpgradeCode="{C76CE9A4-6A50-4889-9A22-7B07BB73C91D}"
+    Scope="perMachine"
+    InstallerVersion="500"
+    Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="Нельзя установить более старую версию MetadataDel поверх более новой." AllowDowngrades="no" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="MainFeature" Title="MetadataDel" Level="1" Absent="disallow">
+      <ComponentGroupRef Id="PublishFiles" />
+      <ComponentRef Id="CtxMenuBaseRegistry" />
+      <ComponentRef Id="CtxMenuWordRegistry" />
+      <ComponentRef Id="CtxMenuExcelRegistry" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="MetadataDel" />
+    </StandardDirectory>
+  </Fragment>
+
+  <Fragment>
+    <Property Id="WORDINSTALLED">
+      <RegistrySearch Root="HKCR" Key="Word.Application\CurVer" Type="raw" />
+    </Property>
+    <Property Id="EXCELINSTALLED">
+      <RegistrySearch Root="HKCR" Key="Excel.Application\CurVer" Type="raw" />
+    </Property>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="CtxMenuBaseRegistry" Directory="INSTALLFOLDER" Guid="*">
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.pdf\shell\Удалить метаданные">
+        <RegistryValue Name="Icon" Value="[INSTALLFOLDER]MetadataDel.exe" Type="string" KeyPath="yes" />
+      </RegistryKey>
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.pdf\shell\Удалить метаданные\command">
+        <RegistryValue Value="&quot;[INSTALLFOLDER]MetadataDel.exe&quot; --log &quot;%1&quot;" Type="string" />
+      </RegistryKey>
+
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.docx\shell\Удалить метаданные">
+        <RegistryValue Name="Icon" Value="[INSTALLFOLDER]MetadataDel.exe" Type="string" />
+      </RegistryKey>
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.docx\shell\Удалить метаданные\command">
+        <RegistryValue Value="&quot;[INSTALLFOLDER]MetadataDel.exe&quot; --log &quot;%1&quot;" Type="string" />
+      </RegistryKey>
+
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.xlsx\shell\Удалить метаданные">
+        <RegistryValue Name="Icon" Value="[INSTALLFOLDER]MetadataDel.exe" Type="string" />
+      </RegistryKey>
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.xlsx\shell\Удалить метаданные\command">
+        <RegistryValue Value="&quot;[INSTALLFOLDER]MetadataDel.exe&quot; --log &quot;%1&quot;" Type="string" />
+      </RegistryKey>
+    </Component>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="CtxMenuWordRegistry" Directory="INSTALLFOLDER" Guid="*">
+      <Condition>WORDINSTALLED</Condition>
+
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.doc\shell\Удалить метаданные">
+        <RegistryValue Name="Icon" Value="[INSTALLFOLDER]MetadataDel.exe" Type="string" KeyPath="yes" />
+      </RegistryKey>
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.doc\shell\Удалить метаданные\command">
+        <RegistryValue Value="&quot;[INSTALLFOLDER]MetadataDel.exe&quot; --log &quot;%1&quot;" Type="string" />
+      </RegistryKey>
+    </Component>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="CtxMenuExcelRegistry" Directory="INSTALLFOLDER" Guid="*">
+      <Condition>EXCELINSTALLED</Condition>
+
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.xls\shell\Удалить метаданные">
+        <RegistryValue Name="Icon" Value="[INSTALLFOLDER]MetadataDel.exe" Type="string" KeyPath="yes" />
+      </RegistryKey>
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.xls\shell\Удалить метаданные\command">
+        <RegistryValue Value="&quot;[INSTALLFOLDER]MetadataDel.exe&quot; --log &quot;%1&quot;" Type="string" />
+      </RegistryKey>
+    </Component>
+  </Fragment>
+</Wix>

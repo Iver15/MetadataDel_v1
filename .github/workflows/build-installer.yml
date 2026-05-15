@@ -1,0 +1,63 @@
+name: Build Windows Installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish self-contained exe
+        run: >
+          dotnet publish MetadataDel.Cli/MetadataDel.Cli.csproj
+          -c Release -r win-x64
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:SelfContained=true
+          -o ./publish
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        run: >
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          installer\MetadataDel.iss
+
+      - name: Create ZIP distribution
+        run: Compress-Archive -Path publish\MetadataDel.exe, publish\tools\win\* -DestinationPath MetadataDel-win-x64.zip
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MetadataDel-Setup
+          path: installer/MetadataDel-Setup-*.exe
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MetadataDel-win-x64
+          path: MetadataDel-win-x64.zip
+
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer/MetadataDel-Setup-*.exe
+            MetadataDel-win-x64.zip
+          generate_release_notes: true

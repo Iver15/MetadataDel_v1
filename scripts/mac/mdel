@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run from repo root: build for macOS (arm64) if needed and clean files passed as args.
+
+ROOT_DIR="$(cd "$(dirname "$0")"/../.. && pwd)"
+cd "$ROOT_DIR"
+
+if ! command -v exiftool >/dev/null 2>&1; then
+  echo "[ERR] exiftool не найден. Установите: brew install exiftool" >&2
+  exit 1
+fi
+
+find_dotnet() {
+  if command -v dotnet >/dev/null 2>&1; then
+    command -v dotnet
+    return
+  fi
+  for p in \
+    "/usr/local/share/dotnet/dotnet" \
+    "/usr/local/bin/dotnet" \
+    "/usr/share/dotnet/dotnet" \
+    "/opt/homebrew/share/dotnet/dotnet" \
+    "/opt/homebrew/bin/dotnet"
+  do
+    if [ -x "$p" ]; then echo "$p"; return; fi
+  done
+}
+
+ensure_built() {
+  if [ -d "./publish-mac" ] && ls -A ./publish-mac >/dev/null 2>&1; then
+    return
+  fi
+  DOTNET_BIN="${DOTNET:-$(find_dotnet || true)}"
+  if [ -z "$DOTNET_BIN" ]; then
+    echo "[ERR] .NET SDK не найден. Укажите путь переменной DOTNET или добавьте dotnet в PATH." >&2
+    exit 1
+  fi
+  echo "[INFO] Сборка под macOS (arm64)..."
+  "$DOTNET_BIN" publish ./MetadataDel.MacCli/MetadataDel.MacCli.csproj \
+    -c Release -r osx-arm64 \
+    -p:PublishSingleFile=true -p:SelfContained=true \
+    -p:NuGetAudit=false \
+    -o ./publish-mac
+}
+
+pick_binary() {
+  local bindir="./publish-mac"
+  if [ -f "$bindir/MetadataDel" ]; then echo "$bindir/MetadataDel"; return; fi
+  if [ -f "$bindir/MetadataDel.Cli" ]; then echo "$bindir/MetadataDel.Cli"; return; fi
+  # Первый файл без типичных расширений
+  local cand
+  cand=$(ls -1 "$bindir" | awk '!/\.(dll|json|pdb|dylib|so|a|xml)$/ {print; exit}')
+  if [ -n "$cand" ]; then echo "$bindir/$cand"; return; fi
+}
+
+if [ "$#" -eq 0 ]; then
+  echo "Использование: bash scripts/mac/mdel <file1> [file2 ...]" >&2
+  exit 2
+fi
+
+ensure_built
+BINARY="$(pick_binary || true)"
+if [ -z "$BINARY" ] || [ ! -f "$BINARY" ]; then
+  echo "[ERR] Не удалось найти исполняемый файл в ./publish-mac" >&2
+  exit 1
+fi
+chmod +x "$BINARY" || true
+"$BINARY" --log --backup=on "$@"
