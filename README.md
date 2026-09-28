@@ -273,7 +273,18 @@ MSI ставит приложение в `Program Files` и регистриру
 - Если PDF открыт другой программой и исходный файл нельзя перезаписать, MetadataDel создаёт очищенную копию рядом: `<имя>.MetadataDel.cleaned.pdf`.
 - Для максимально полной очистки PDF в Windows-дистрибутиве должен присутствовать `tools/win/exiftool.exe` вместе с каталогом `tools/win/exiftool_files/`.
 
+## Автор
+
+Юрий Мизенко
+
+- Сайт: [mizenko.ru](https://mizenko.ru)
+- Email: [yuramizenko@gmail.com](mailto:yuramizenko@gmail.com)
+- Telegram: [@mizenko](https://t.me/mizenko)
+- GitHub: [Iver15](https://github.com/Iver15)
+
 ## Лицензии и сторонние компоненты
+
+Copyright (C) 2025–2026 Юрий Мизенко.
 
 Код проекта распространяется по лицензии GNU Affero General Public License v3.0 or later. Полный текст лицензии находится в [LICENSE](LICENSE).
 
