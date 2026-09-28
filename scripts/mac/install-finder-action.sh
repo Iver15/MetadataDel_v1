@@ -12,6 +12,7 @@ SCRIPT_DEST="$SUPPORT_DIR/finder-action.sh"
 
 mkdir -p "$SUPPORT_DIR" "$WORKFLOW_DIR/Contents"
 
+printf '%s\n' "${METADATADEL_INSTALL_DIR:-$HOME/.local/bin}/${METADATADEL_COMMAND_NAME:-metadatadel}" > "$SUPPORT_DIR/command-path"
 cp "$ROOT_DIR/scripts/mac/finder-action.sh" "$SCRIPT_DEST"
 chmod +x "$SCRIPT_DEST"
 

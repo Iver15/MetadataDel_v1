@@ -6,6 +6,7 @@
   <Package
     Name="MetadataDel"
     Language="1049"
+    Codepage="1251"
     Version="$(var.ProductVersion)"
     Manufacturer="MetadataDel"
     UpgradeCode="{C76CE9A4-6A50-4889-9A22-7B07BB73C91D}"
@@ -14,9 +15,10 @@
     Compressed="yes">
     <MajorUpgrade DowngradeErrorMessage="Нельзя установить более старую версию MetadataDel поверх более новой." AllowDowngrades="no" />
     <MediaTemplate EmbedCab="yes" />
+    <SummaryInformation Codepage="1251" />
 
-    <Feature Id="MainFeature" Title="MetadataDel" Level="1" Absent="disallow">
-      <ComponentGroupRef Id="PublishFiles" />
+    <Feature Id="MainFeature" Title="MetadataDel" Level="1" AllowAbsent="no">
+      <Files Include="$(var.PublishDir)\**" Directory="INSTALLFOLDER" />
       <ComponentRef Id="CtxMenuBaseRegistry" />
       <ComponentRef Id="CtxMenuWordRegistry" />
       <ComponentRef Id="CtxMenuExcelRegistry" />
@@ -27,15 +29,6 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="MetadataDel" />
     </StandardDirectory>
-  </Fragment>
-
-  <Fragment>
-    <Property Id="WORDINSTALLED">
-      <RegistrySearch Root="HKCR" Key="Word.Application\CurVer" Type="raw" />
-    </Property>
-    <Property Id="EXCELINSTALLED">
-      <RegistrySearch Root="HKCR" Key="Excel.Application\CurVer" Type="raw" />
-    </Property>
   </Fragment>
 
   <Fragment>
@@ -65,8 +58,6 @@
 
   <Fragment>
     <Component Id="CtxMenuWordRegistry" Directory="INSTALLFOLDER" Guid="*">
-      <Condition>WORDINSTALLED</Condition>
-
       <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.doc\shell\Удалить метаданные">
         <RegistryValue Name="Icon" Value="[INSTALLFOLDER]MetadataDel.exe" Type="string" KeyPath="yes" />
       </RegistryKey>
@@ -78,8 +69,6 @@
 
   <Fragment>
     <Component Id="CtxMenuExcelRegistry" Directory="INSTALLFOLDER" Guid="*">
-      <Condition>EXCELINSTALLED</Condition>
-
       <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\SystemFileAssociations\.xls\shell\Удалить метаданные">
         <RegistryValue Name="Icon" Value="[INSTALLFOLDER]MetadataDel.exe" Type="string" KeyPath="yes" />
       </RegistryKey>

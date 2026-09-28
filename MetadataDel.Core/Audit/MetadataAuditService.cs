@@ -57,8 +57,19 @@ public static class MetadataAuditService
             ".pdf" => AuditPdf(path),
             ".docx" => AuditDocx(path),
             ".xlsx" => AuditXlsx(path),
-            _ => new MetadataAuditResult(path, extension, Array.Empty<MetadataAuditFinding>())
+            ".doc" or ".xls" => AuditOle(path, extension),
+            _ => throw new NotSupportedException($"Аудит формата {extension} не поддерживается.")
         };
+    }
+
+    private static MetadataAuditResult AuditOle(string path, string extension)
+    {
+        using var root = OpenMcdf.RootStorage.OpenRead(path);
+        var findings = root.EnumerateEntries()
+            .Where(e => e.Name.StartsWith("\x05", StringComparison.Ordinal))
+            .Select(e => new MetadataAuditFinding("ole.properties", "OLE-свойства: " + e.Name))
+            .ToList();
+        return new MetadataAuditResult(path, extension.TrimStart('.'), findings);
     }
 
     private static MetadataAuditResult AuditPdf(string path)
@@ -73,6 +84,19 @@ public static class MetadataAuditService
         AddIf(findings, HasText(info.GetSubject()), "pdf.info.subject", "subject PDF");
         AddIf(findings, HasText(info.GetKeywords()), "pdf.info.keywords", "keywords PDF");
         AddIf(findings, HasText(info.GetProducer()), "pdf.info.producer", "producer PDF");
+
+        foreach (var key in document.GetTrailer().GetAsDictionary(PdfName.Info).KeySet())
+        {
+            if (key == PdfName.Author || key == PdfName.Creator || key == PdfName.Title ||
+                key == PdfName.Subject || key == PdfName.Keywords || key == PdfName.Producer) continue;
+            AddIf(findings, HasText(document.GetTrailer().GetAsDictionary(PdfName.Info).Get(key)?.ToString()), "pdf.info.other", "свойство PDF " + key);
+        }
+        for (var page = 1; page <= document.GetNumberOfPages(); page++)
+        {
+            var dictionary = document.GetPage(page).GetPdfObject();
+            AddIf(findings, dictionary.ContainsKey(PdfName.Metadata) || dictionary.ContainsKey(new PdfName("PieceInfo")) ||
+                dictionary.ContainsKey(PdfName.AA) || dictionary.ContainsKey(new PdfName("AF")), "pdf.page.metadata", "метаданные страницы PDF");
+        }
 
         var xmp = document.GetXmpMetadata();
         AddIf(findings, xmp is { Length: > 0 }, "pdf.xmp", "XMP-метаданные PDF");

@@ -23,21 +23,29 @@ public sealed class PdfCleaner : IFileCleaner
         {
             var warnings = new List<string>();
 
-            // Резервная копия до изменения
-            if (options.Backup)
-            {
-                try
-                {
-                    File.Copy(path, path + ".bak", overwrite: true);
-                }
-                catch
-                {
-                    // Не критично: продолжаем очистку даже если резерв не создан
-                }
-            }
+            ct.ThrowIfCancellationRequested();
+            path = Path.GetFullPath(path);
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("Очистка символических ссылок не поддерживается. Укажите исходный файл.");
+            if (options.Backup) FileCleaningTransaction.CreateBackup(path);
 
             // Читаем оригинал в память, обрабатываем, записываем результат обратно
             byte[] originalBytes = await ReadAllBytesWithRetryAsync(path, ct);
+
+            using (var flattened = new MemoryStream())
+            {
+                using (var source = new PdfDocument(new PdfReader(new MemoryStream(originalBytes)), new PdfWriter(flattened)))
+                {
+                    var form = PdfAcroForm.GetAcroForm(source, false);
+                    if (form != null)
+                    {
+                        form.FlattenFields();
+                        if (PdfAcroForm.GetAcroForm(source, false)?.GetFormFields().Count > 0)
+                            throw new InvalidDataException("Не удалось сохранить видимое содержимое PDF-формы.");
+                    }
+                }
+                originalBytes = flattened.ToArray();
+            }
 
             byte[] cleanedBytes;
             using (var inputStream = new MemoryStream(originalBytes))
@@ -77,6 +85,11 @@ public sealed class PdfCleaner : IFileCleaner
                     for (int i = 1; i <= dst.GetNumberOfPages(); i++)
                     {
                         var page = dst.GetPage(i);
+                        page.GetPdfObject().Remove(PdfName.Metadata);
+                        page.GetPdfObject().Remove(new PdfName("PieceInfo"));
+                        page.GetPdfObject().Remove(new PdfName("LastModified"));
+                        page.GetPdfObject().Remove(PdfName.AA);
+                        page.GetPdfObject().Remove(new PdfName("AF"));
                         var anns = page.GetAnnotations();
                         for (int j = anns.Count - 1; j >= 0; j--)
                             page.RemoveAnnotation(anns[j]);
@@ -95,7 +108,21 @@ public sealed class PdfCleaner : IFileCleaner
             // iText AGPL принудительно вписывает Producer при Close().
             // Патчим байты в памяти до записи на диск — заменяем содержимое
             // строки Producer пробелами той же длины, чтобы не сломать xref.
-            BlankPdfStringValue(cleanedBytes, "/Producer");
+            // Limit byte edits to the Info object located by the PDF cross-reference table.
+            // Searching the whole file could alter page content containing /Producer.
+            using (var inspection = new PdfDocument(new PdfReader(new MemoryStream(cleanedBytes))))
+            {
+                var reference = inspection.GetTrailer().GetAsDictionary(PdfName.Info).GetIndirectReference();
+                var offset = checked((int)reference.GetOffset());
+                var infoBytes = cleanedBytes.AsSpan(offset).ToArray();
+                var end = System.Text.Encoding.ASCII.GetString(infoBytes).IndexOf("endobj", StringComparison.Ordinal);
+                if (end < 0) throw new InvalidDataException("Не найден конец Info-объекта PDF.");
+                var dictionary = infoBytes.AsSpan(0, end).ToArray();
+                BlankPdfStringValue(dictionary, "/Producer");
+                BlankPdfStringValue(dictionary, "/CreationDate");
+                BlankPdfStringValue(dictionary, "/ModDate");
+                dictionary.CopyTo(cleanedBytes, offset);
+            }
 
             var finalPath = path;
 
@@ -132,8 +159,12 @@ public sealed class PdfCleaner : IFileCleaner
     {
         var warnings = new List<string>();
 
-        await WriteAllBytesWithRetryAsync(path, cleanedBytes, ct);
-        await WaitForExclusiveAccessAsync(path, ct);
+        var outputPath = path;
+        var temporaryPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, $".mdel-{Guid.NewGuid():N}.pdf");
+        try
+        {
+        path = temporaryPath;
+        await File.WriteAllBytesAsync(path, cleanedBytes, ct);
 
         // exiftool всегда пытается дочистить (ICC, Trailer и пр.)
         // Producer уже удалён патчингом байтов, exiftool опционален
@@ -144,26 +175,28 @@ public sealed class PdfCleaner : IFileCleaner
             warnings.Add($"exiftool-очистка не удалась: {exiftool.Message}");
         }
 
-        // Дополнительно очищаем метаданные файловой системы
-        if (options.WipeFsTimestamps)
-        {
-            try
-            {
-                var ts = new DateTime(1980, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-                File.SetCreationTimeUtc(path, ts);
-                File.SetLastWriteTimeUtc(path, ts);
-                File.SetLastAccessTimeUtc(path, ts);
-            }
-            catch { /* ignore */ }
-        }
-
         var audit = await TryAuditWithRetryAsync(path, ct);
         if (audit?.HasSensitiveMetadata == true)
         {
             warnings.Add("После очистки остались признаки метаданных: " + audit.Summarize());
         }
 
+        ct.ThrowIfCancellationRequested();
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                if (File.Exists(outputPath))
+                    using (new FileStream(outputPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+                File.Move(temporaryPath, outputPath, overwrite: true);
+                break;
+            }
+            catch (IOException) when (attempt < MaxRetries) { await Task.Delay(RetryDelay, ct); }
+        }
+        AddWarning(warnings, FileCleaningTransaction.WipeTimestamps(outputPath, options.WipeFsTimestamps));
         return JoinWarnings(warnings);
+        }
+        finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
     }
 
     /// <summary>
@@ -180,46 +213,6 @@ public sealed class PdfCleaner : IFileCleaner
                 var bytes = new byte[fs.Length];
                 await fs.ReadExactlyAsync(bytes, ct);
                 return bytes;
-            }
-            catch (IOException) when (attempt < MaxRetries)
-            {
-                await Task.Delay(RetryDelay, ct);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Запись файла с retry — для сетевых дисков с транзиентными блокировками.
-    /// </summary>
-    private static async Task WriteAllBytesWithRetryAsync(string path, byte[] data, CancellationToken ct)
-    {
-        for (int attempt = 0; ; attempt++)
-        {
-            try
-            {
-                using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-                await fs.WriteAsync(data, ct);
-                return;
-            }
-            catch (IOException) when (attempt < MaxRetries)
-            {
-                await Task.Delay(RetryDelay, ct);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Дожидается, пока файл можно будет снова открыть эксклюзивно.
-    /// Это снижает число ложных ошибок на сетевых дисках после записи.
-    /// </summary>
-    private static async Task WaitForExclusiveAccessAsync(string path, CancellationToken ct)
-    {
-        for (int attempt = 0; ; attempt++)
-        {
-            try
-            {
-                using var probe = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-                return;
             }
             catch (IOException) when (attempt < MaxRetries)
             {
@@ -292,26 +285,42 @@ public sealed class PdfCleaner : IFileCleaner
                 var psi = new ProcessStartInfo
                 {
                     FileName = exiftoolPath,
-                    Arguments = arguments + "\"" + path + "\"",
                     UseShellExecute = false,
                     RedirectStandardError = true,
                     RedirectStandardOutput = true,
                     CreateNoWindow = true
                 };
 
+                foreach (var argument in arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                    psi.ArgumentList.Add(argument);
+                psi.ArgumentList.Add("--");
+                psi.ArgumentList.Add(Path.GetFullPath(path));
                 using var process = Process.Start(psi);
                 if (process == null)
                 {
                     return new CleanResult(path, false, "Не удалось запустить exiftool для очистки PDF.");
                 }
 
-                await process.WaitForExitAsync(ct);
+                var stdout = process.StandardOutput.ReadToEndAsync();
+                var stderr = process.StandardError.ReadToEndAsync();
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeout.CancelAfter(TimeSpan.FromSeconds(60));
+                try { await process.WaitForExitAsync(timeout.Token); }
+                catch (OperationCanceledException)
+                {
+                    if (!process.HasExited) process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync(CancellationToken.None);
+                    await Task.WhenAll(stdout, stderr);
+                    ct.ThrowIfCancellationRequested();
+                    return new CleanResult(path, false, "exiftool превысил время ожидания (60 секунд).");
+                }
+                await Task.WhenAll(stdout, stderr);
                 if (process.ExitCode == 0)
                 {
                     return new CleanResult(path, true);
                 }
 
-                var err = (await process.StandardError.ReadToEndAsync()).Trim();
+                var err = (await stderr).Trim();
                 if (attempt < MaxRetries && IsFileLockError(err))
                 {
                     await Task.Delay(RetryDelay, ct);
@@ -323,7 +332,7 @@ public sealed class PdfCleaner : IFileCleaner
         }
         catch (OperationCanceledException)
         {
-            return new CleanResult(path, false, "Очистка PDF через exiftool отменена.");
+            throw;
         }
         catch (Exception ex)
         {

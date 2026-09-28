@@ -9,6 +9,8 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/us
 
 APP_NAME="MetadataDel"
 BIN="$HOME/.local/bin/metadatadel"
+CONFIG="$HOME/Library/Application Support/MetadataDel/command-path"
+if [ -f "$CONFIG" ]; then IFS= read -r BIN < "$CONFIG"; fi
 LOG_DIR="$HOME/Library/Logs/MetadataDel"
 LOG_FILE="$LOG_DIR/finder-action.log"
 
@@ -42,9 +44,9 @@ fi
 if "$BIN" --log --backup=on "$@" >>"$LOG_FILE" 2>&1; then
   notify "$APP_NAME" "Метаданные удалены: $# объект(ов)."
   exit 0
+else
+  status=$?
 fi
-
-status=$?
 message="Очистка завершилась с ошибкой. Журнал: $LOG_FILE"
 echo "[ERR] exit=$status" >>"$LOG_FILE"
 notify "$APP_NAME" "$message"

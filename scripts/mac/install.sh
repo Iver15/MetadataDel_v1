@@ -58,7 +58,6 @@ echo "[INFO] Сборка MetadataDel для $RID..."
 "$DOTNET_BIN" publish ./MetadataDel.MacCli/MetadataDel.MacCli.csproj \
   -c Release -r "$RID" \
   -p:PublishSingleFile=true -p:SelfContained=true \
-  -p:NuGetAudit=false \
   -o "$PUBLISH_DIR"
 
 if [ ! -f "$PUBLISH_DIR/MetadataDel" ]; then
@@ -70,7 +69,7 @@ mkdir -p "$INSTALL_DIR"
 cp "$PUBLISH_DIR/MetadataDel" "$INSTALL_DIR/$COMMAND_NAME"
 chmod +x "$INSTALL_DIR/$COMMAND_NAME"
 
-ln -sf "$COMMAND_NAME" "$INSTALL_DIR/mdel"
+if [ "$COMMAND_NAME" != "mdel" ]; then ln -sf "$COMMAND_NAME" "$INSTALL_DIR/mdel"; fi
 
 echo "[OK] Установлено:"
 echo "     $INSTALL_DIR/$COMMAND_NAME"
@@ -93,6 +92,6 @@ echo "  $COMMAND_NAME --help"
 echo "  mdel --log --backup=on /path/to/file.pdf"
 
 echo
-bash "$ROOT_DIR/scripts/mac/install-finder-action.sh"
+METADATADEL_INSTALL_DIR="$INSTALL_DIR" METADATADEL_COMMAND_NAME="$COMMAND_NAME" bash "$ROOT_DIR/scripts/mac/install-finder-action.sh"
 echo
 echo "В Finder: правый клик по файлу или папке -> Быстрые действия -> Удалить метаданные (MetadataDel)"

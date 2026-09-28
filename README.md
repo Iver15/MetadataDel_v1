@@ -94,7 +94,7 @@ MetadataDel.exe --wipe-fs file.pdf
 | DOC | OLE property streams со свойствами документа | Microsoft Office не нужен для CLI-очистки |
 | XLS | OLE property streams со свойствами документа | Microsoft Office не нужен для CLI-очистки |
 
-Контекстное меню для некоторых legacy-форматов зависит от того, как Windows определяет связанные приложения. CLI и обработка папок работают по расширению файла.
+Контекстное меню, CLI и обработка папок поддерживают DOC/XLS без установленного Microsoft Office.
 
 ## Опции CLI
 
@@ -111,11 +111,15 @@ MetadataDel.exe --wipe-fs file.pdf
 | `--diagnostics` | Проверить доступные точки интеграции с Проводником |
 | `--help`, `-h` | Показать справку |
 
-Коды возврата:
+Коды возврата при очистке:
 
 - `0` - все файлы обработаны успешно;
 - `1` - часть файлов обработана, часть завершилась ошибкой;
 - `2` - ни один файл не обработан или команда вызвана неверно.
+
+В режиме `--audit`: `0` — проверенные признаки не найдены, `1` — найдены метаданные, `2` — ошибка проверки или неподдерживаемый формат. Аудит принимает папки и флаг `--log`, не создавая отчёты рядом с документами.
+
+Повторяющиеся пути обрабатываются один раз. Неизвестные параметры отклоняются до очистки. Для имени файла, начинающегося с дефиса, используйте `-- <имя>`.
 
 ## Установка без Setup.exe
 
@@ -148,7 +152,6 @@ MetadataDel.exe --uninstall
   -p:PublishSingleFile=true \
   -p:IncludeNativeLibrariesForSelfExtract=true \
   -p:SelfContained=true \
-  -p:NuGetAudit=false \
   -o ./publish
 ```
 
@@ -160,7 +163,6 @@ Apple Silicon:
 ~/.dotnet/dotnet publish MetadataDel.MacCli/MetadataDel.MacCli.csproj -c Release -r osx-arm64 \
   -p:PublishSingleFile=true \
   -p:SelfContained=true \
-  -p:NuGetAudit=false \
   -o ./publish-mac
 ```
 
@@ -170,7 +172,6 @@ Intel:
 ~/.dotnet/dotnet publish MetadataDel.MacCli/MetadataDel.MacCli.csproj -c Release -r osx-x64 \
   -p:PublishSingleFile=true \
   -p:SelfContained=true \
-  -p:NuGetAudit=false \
   -o ./publish-mac-x64
 ```
 
@@ -224,10 +225,10 @@ bash scripts/mac/build-dmg.sh
 ### Тесты
 
 ```bash
-~/.dotnet/dotnet test MetadataDel.Core.Tests/MetadataDel.Core.Tests.csproj -p:NuGetAudit=false
+~/.dotnet/dotnet test MetadataDel.Core.Tests/MetadataDel.Core.Tests.csproj
 ```
 
-Тесты кроссплатформенные и программно создают PDF, DOCX и XLSX-файлы.
+Тесты кроссплатформенные и программно создают PDF, DOCX, XLSX и OLE-контейнеры. Для проверки CLI и Finder-обёртки после Release-сборки запустите `python3 scripts/tests/smoke.py /path/to/dotnet`.
 
 ## Установщики и релизы
 
@@ -250,7 +251,7 @@ bash scripts/mac/build-dmg.sh
 ### MSI для доменного развёртывания
 
 ```powershell
-dotnet tool install --global wix
+dotnet tool install --global wix --version 5.0.2
 pwsh installer/msi/build-msi.ps1 -Version 2.2.1
 ```
 
@@ -264,6 +265,9 @@ MSI ставит приложение в `Program Files` и регистриру
 
 ## Ограничения
 
+- Книги Excel с используемыми внешними формулами или таблицами запросов отклоняются без изменения оригинала: сначала преобразуйте такие данные в значения. Локальные структурированные формулы и VML-кнопки сохраняются.
+- Изменения DOCX/XLSX/OLE и PDF готовятся во временном файле рядом с оригиналом. Запрошенная резервная копия обязательна: при ошибке её создания очистка не начинается. Повторные копии получают имена `.2.bak`, `.3.bak`, не затирая первую `.bak`.
+- Символические ссылки не очищаются; при обходе папок переход по ним отключён.
 - MetadataDel удаляет известные документные метаданные, но не является криминалистическим инструментом и не гарантирует удаление любой возможной скрытой информации из произвольного файла.
 - `--wipe-fs` сбрасывает даты файловой системы, но не удаляет владельца файла, ACL, сетевые атрибуты и свойства, которые хранит Windows или файловый сервер.
 - Если PDF открыт другой программой и исходный файл нельзя перезаписать, MetadataDel создаёт очищенную копию рядом: `<имя>.MetadataDel.cleaned.pdf`.

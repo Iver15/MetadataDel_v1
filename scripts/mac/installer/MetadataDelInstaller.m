@@ -1,4 +1,6 @@
 #import <Cocoa/Cocoa.h>
+#include <errno.h>
+#include <stdio.h>
 
 @interface InstallerAppDelegate : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSWindow *window;
@@ -211,10 +213,12 @@
 
 - (IBAction)uninstallClicked:(id)sender {
     [self runTaskWithTitle:@"Удаление" block:^(NSError **error) {
-        NSError *ignored = nil;
-        [self runScript:[self resourcePath:@"scripts/mac/uninstall-finder-action.sh"] error:&ignored];
-        [NSFileManager.defaultManager removeItemAtPath:[self commandPath] error:nil];
-        [NSFileManager.defaultManager removeItemAtPath:[self aliasPath] error:nil];
+        [self runScript:[self resourcePath:@"scripts/mac/uninstall-finder-action.sh"] error:error];
+        if (*error) return;
+        for (NSString *path in @[[self commandPath], [self aliasPath]]) {
+            NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
+            if (attributes && ![NSFileManager.defaultManager removeItemAtPath:path error:error]) return;
+        }
         [self appendLog:@"Готово. Команда и Finder Quick Action удалены."];
     }];
 }
@@ -229,20 +233,19 @@
     [fm createDirectoryAtPath:[self installDir] withIntermediateDirectories:YES attributes:nil error:error];
     if (*error) return;
 
-    if ([fm fileExistsAtPath:[self commandPath]]) {
-        [fm removeItemAtPath:[self commandPath] error:error];
-        if (*error) return;
-    }
-
-    [fm copyItemAtPath:[self resourcePath:@"bin/metadatadel"] toPath:[self commandPath] error:error];
+    NSString *staged = [[self installDir] stringByAppendingPathComponent:[@".metadatadel-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+    [fm copyItemAtPath:[self resourcePath:@"bin/metadatadel"] toPath:staged error:error];
     if (*error) return;
-
-    [fm setAttributes:@{NSFilePosixPermissions: @0755} ofItemAtPath:[self commandPath] error:error];
+    [fm setAttributes:@{NSFilePosixPermissions: @0755} ofItemAtPath:staged error:error];
+    if (!*error && rename(staged.fileSystemRepresentation, self.commandPath.fileSystemRepresentation) != 0) {
+        *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil];
+    }
+    [fm removeItemAtPath:staged error:nil];
     if (*error) return;
 
     [self removeQuarantine:[self commandPath]];
 
-    if ([fm fileExistsAtPath:[self aliasPath]]) {
+    if ([fm attributesOfItemAtPath:[self aliasPath] error:nil]) {
         [fm removeItemAtPath:[self aliasPath] error:error];
         if (*error) return;
     }
@@ -268,9 +271,8 @@
     task.standardError = pipe;
     [task launchAndReturnError:error];
     if (*error) return;
-    [task waitUntilExit];
-
     NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+    [task waitUntilExit];
     NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
     NSString *trimmed = [output stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (trimmed.length > 0) {

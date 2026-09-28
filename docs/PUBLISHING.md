@@ -11,7 +11,7 @@
 - Запустить тесты:
 
 ```bash
-~/.dotnet/dotnet test MetadataDel.Core.Tests/MetadataDel.Core.Tests.csproj -p:NuGetAudit=false
+~/.dotnet/dotnet test MetadataDel.Core.Tests/MetadataDel.Core.Tests.csproj
 ```
 
 ## Релизная проверка Windows
@@ -29,7 +29,6 @@ python3 scripts/render_windows_icon.py icon.svg MetadataDel.Cli/app.ico
   -p:PublishSingleFile=true \
   -p:IncludeNativeLibrariesForSelfExtract=true \
   -p:SelfContained=true \
-  -p:NuGetAudit=false \
   -o ./publish
 ```
 

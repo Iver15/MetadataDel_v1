@@ -15,6 +15,7 @@ internal static class WordPrivacySanitizer
 
     private static readonly HashSet<string> RevisionDeletions = new(StringComparer.OrdinalIgnoreCase)
     {
+        "rPrChange", "pPrChange", "sectPrChange", "tblPrChange", "tblGridChange", "trPrChange", "tcPrChange",
         "del", "delText", "moveFrom", "moveFromRangeStart", "moveFromRangeEnd",
         "moveToRangeStart", "moveToRangeEnd", "commentRangeStart", "commentRangeEnd",
         "commentReference", "customXmlDelRangeStart", "customXmlDelRangeEnd",
@@ -189,7 +190,7 @@ internal static class WordPrivacySanitizer
             changed = true;
         }
 
-        foreach (var element in document.Descendants().Where(e => ContentControlMetadataElements.Contains(e.Name.LocalName)).ToList())
+        foreach (var element in document.Descendants().Where(e => e.Parent?.Name.LocalName == "sdtPr" && ContentControlMetadataElements.Contains(e.Name.LocalName)).ToList())
         {
             element.Remove();
             changed = true;
@@ -201,7 +202,7 @@ internal static class WordPrivacySanitizer
             changed = true;
         }
 
-        foreach (var element in document.Descendants().Where(e => RevisionWrappers.Contains(e.Name.LocalName)).ToList())
+        foreach (var element in document.Descendants().Where(e => RevisionWrappers.Contains(e.Name.LocalName)).Reverse().ToList())
         {
             element.ReplaceWith(element.Nodes());
             changed = true;
@@ -251,6 +252,9 @@ internal static class WordPrivacySanitizer
         properties.Description = null;
         properties.Category = null;
         properties.ContentStatus = null;
+        properties.Identifier = null;
+        properties.Version = null;
+        properties.Language = null;
 
         try { properties.Created = null; } catch { }
         try { properties.Modified = null; } catch { }
@@ -291,7 +295,8 @@ internal static class WordPrivacySanitizer
     {
         if (HasText(properties.Creator) || HasText(properties.LastModifiedBy) || HasText(properties.Title) ||
             HasText(properties.Subject) || HasText(properties.Keywords) || HasText(properties.Description) ||
-            HasText(properties.Category) || HasText(properties.ContentStatus))
+            HasText(properties.Category) || HasText(properties.ContentStatus) ||
+            HasText(properties.Identifier) || HasText(properties.Version) || HasText(properties.Language))
         {
             findings.Add("core properties");
         }

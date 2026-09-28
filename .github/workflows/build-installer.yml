@@ -21,6 +21,9 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Test core
+        run: dotnet test MetadataDel.Core.Tests/MetadataDel.Core.Tests.csproj -c Release
+
       - name: Publish self-contained exe
         run: >
           dotnet publish MetadataDel.Cli/MetadataDel.Cli.csproj
@@ -29,6 +32,22 @@ jobs:
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:SelfContained=true
           -o ./publish
+
+      - name: Verify bundled ExifTool
+        shell: pwsh
+        run: |
+          if (-not (Test-Path publish/tools/win/exiftool_files/lib/Image/ExifTool/PDF.pm)) { throw "Missing ExifTool PDF module" }
+          & ./publish/tools/win/exiftool.exe -ver
+          if ($LASTEXITCODE -ne 0) { throw "ExifTool startup failed" }
+          & ./publish/tools/win/exiftool.exe -listw > $null
+          if ($LASTEXITCODE -ne 0) { throw "ExifTool modules failed to load" }
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          [xml]$project = Get-Content MetadataDel.Cli/MetadataDel.Cli.csproj
+          ./installer/msi/build-msi.ps1 -Version $project.Project.PropertyGroup.Version
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
@@ -39,7 +58,15 @@ jobs:
           installer\MetadataDel.iss
 
       - name: Create ZIP distribution
-        run: Compress-Archive -Path publish\MetadataDel.exe, publish\tools\win\* -DestinationPath MetadataDel-win-x64.zip
+        run: Compress-Archive -Path publish\* -DestinationPath MetadataDel-win-x64.zip
+
+      - name: Verify ZIP layout
+        shell: pwsh
+        run: |
+          Expand-Archive MetadataDel-win-x64.zip -DestinationPath zip-check
+          foreach ($file in @('MetadataDel.exe', 'app.ico', 'tools/win/exiftool.exe', 'tools/win/exiftool_files/lib/Image/ExifTool/PDF.pm')) {
+            if (-not (Test-Path (Join-Path zip-check $file))) { throw "Missing distribution file: $file" }
+          }
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4

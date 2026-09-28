@@ -1,7 +1,7 @@
-$ErrorActionPreference = "Stop"
 param(
 	[string]$ExePath = "$PSScriptRoot\..\publish\MetadataDel.exe"
 )
+$ErrorActionPreference = "Stop"
 
 if (Test-Path $ExePath) {
 	$resolvedExe = (Resolve-Path $ExePath).Path
@@ -17,4 +17,8 @@ foreach ($ext in $exts) {
 	}
 }
 
+$directoryKey = 'HKCU:Software\Classes\Directory\shell\Удалить метаданные'
+if (Test-Path $directoryKey) { Remove-Item -Recurse -Force $directoryKey }
+$sendTo = [Environment]::GetFolderPath('SendTo')
+Remove-Item (Join-Path $sendTo 'Удалить метаданные.cmd') -ErrorAction SilentlyContinue
 Write-Host "Контекстное меню удалено (резервная очистка реестра)."

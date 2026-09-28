@@ -23,7 +23,7 @@ using W = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace MetadataDel.Core.Tests;
 
-public sealed class MetadataCleaningTests : IDisposable
+public sealed partial class MetadataCleaningTests : IDisposable
 {
     private readonly string _tempDirectory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "mdel-tests", Guid.NewGuid().ToString("N"));
 

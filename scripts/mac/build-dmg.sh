@@ -30,6 +30,11 @@ if [ -z "$RID" ]; then
       ;;
   esac
 fi
+case "$RID" in
+  osx-arm64) APP_ARCH="arm64" ;;
+  osx-x64) APP_ARCH="x86_64" ;;
+  *) echo "[ERR] Неподдерживаемый RID: $RID" >&2; exit 1 ;;
+esac
 DMG_PATH="$DIST_DIR/${PRODUCT_NAME}-${VERSION}-${RID}.dmg"
 STAGING_DMG_PATH="$DIST_DIR/${PRODUCT_NAME}-${VERSION}-${RID}.staging.dmg"
 
@@ -62,7 +67,6 @@ rm -rf "$PUBLISH_DIR"
 "$DOTNET_BIN" publish ./MetadataDel.MacCli/MetadataDel.MacCli.csproj \
   -c Release -r "$RID" \
   -p:PublishSingleFile=true -p:SelfContained=true \
-  -p:NuGetAudit=false \
   -o "$PUBLISH_DIR"
 
 if [ ! -f "$PUBLISH_DIR/MetadataDel" ]; then
@@ -87,7 +91,7 @@ iconutil -c icns "$DIST_DIR/AppIcon.iconset" -o "$RESOURCES_DIR/AppIcon.icns"
 sed "s#<string>2.2.1</string>#<string>$VERSION</string>#g" \
   scripts/mac/installer/Info.plist > "$APP_DIR/Contents/Info.plist"
 
-clang -fobjc-arc scripts/mac/installer/MetadataDelInstaller.m \
+clang -arch "$APP_ARCH" -fobjc-arc scripts/mac/installer/MetadataDelInstaller.m \
   -framework Cocoa \
   -o "$APP_DIR/Contents/MacOS/$APP_NAME"
 clang -fobjc-arc scripts/mac/installer/set_file_icon.m \
@@ -122,12 +126,19 @@ hdiutil create \
   "$STAGING_DMG_PATH"
 
 mount_dir="$(mktemp -d)"
+cleanup_mount() {
+  hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
+  rmdir "$mount_dir" 2>/dev/null || true
+}
+trap cleanup_mount EXIT
 hdiutil attach "$STAGING_DMG_PATH" -mountpoint "$mount_dir" -nobrowse -readwrite >/dev/null
 cp "$RESOURCES_DIR/AppIcon.icns" "$mount_dir/.VolumeIcon.icns"
 SetFile -a C "$mount_dir"
 SetFile -a V "$mount_dir/.VolumeIcon.icns"
 sync
 hdiutil detach "$mount_dir" >/dev/null
+rmdir "$mount_dir"
+trap - EXIT
 
 hdiutil convert "$STAGING_DMG_PATH" \
   -format UDZO \

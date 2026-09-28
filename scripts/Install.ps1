@@ -1,7 +1,7 @@
-$ErrorActionPreference = "Stop"
 param(
 	[string]$ExePath = "$PSScriptRoot\..\publish\MetadataDel.exe"
 )
+$ErrorActionPreference = "Stop"
 
 if (-not (Test-Path $ExePath)) {
 	throw "Не найден файл '$ExePath'."

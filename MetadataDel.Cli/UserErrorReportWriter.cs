@@ -8,7 +8,7 @@ internal static class UserErrorReportWriter
     {
         try
         {
-            var directory = Path.GetDirectoryName(path);
+            var directory = Path.GetDirectoryName(Path.GetFullPath(path));
             if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
             {
                 return null;

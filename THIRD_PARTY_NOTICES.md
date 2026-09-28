@@ -15,7 +15,7 @@ MetadataDel распространяется по лицензии GNU Affero Ge
 | `itext7` 7.2.5 | Очистка PDF | AGPL. Условия лицензии: https://www.gnu.org/licenses/agpl.html |
 | `DocumentFormat.OpenXml` 3.0.2 | Очистка `.docx` и `.xlsx` | MIT |
 | `System.IO.Packaging` 8.0.1 | Работа с OpenXML-пакетами | MIT |
-| `OpenMcdf` 2.3.1 | Очистка OLE-документов `.doc` и `.xls` | MPL-2.0 |
+| `OpenMcdf` 3.1.4 | Очистка OLE-документов `.doc` и `.xls` | MPL-2.0 |
 | `Microsoft.Office.Interop.Word` | Windows-target сборка, совместимость с Word Interop | Пакет NuGet без явного license expression в `.nuspec`; используется только в `net8.0-windows` |
 | `Microsoft.Office.Interop.Excel` | Windows-target сборка, совместимость с Excel Interop | Пакет NuGet без явного license expression в `.nuspec`; используется только в `net8.0-windows` |
 | `xunit`, `Microsoft.NET.Test.Sdk` | Тестовый проект | Не входят в пользовательский дистрибутив |
@@ -38,3 +38,5 @@ Windows-дистрибутив может включать:
 ## Примечание о распространении
 
 При публикации исходного кода и бинарных сборок нужно сохранять лицензию AGPL, предоставлять доступ к исходному коду соответствующей версии и не удалять лицензионные файлы, которые поставляются рядом с встроенным `exiftool`.
+
+Модули `tools/win/exiftool_files/lib/Image/ExifTool/` восстановлены из официального [тега ExifTool 13.52](https://github.com/exiftool/exiftool/tree/13.52/lib/Image/ExifTool), без изменения исходников.

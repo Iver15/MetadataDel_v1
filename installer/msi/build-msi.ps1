@@ -1,39 +1,21 @@
 param(
-    [string]$PublishDir = (Join-Path $PSScriptRoot '..\publish'),
-    [string]$Version = '1.0.0'
+    [string]$PublishDir = (Join-Path $PSScriptRoot '..\..\publish'),
+    [string]$Version = '2.2.1'
 )
+$ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path $PublishDir)) {
-    Write-Error "Не найден каталог публикации '$PublishDir'. Сначала выполните 'dotnet publish'."
-    exit 1
+if (-not (Test-Path (Join-Path $PublishDir 'MetadataDel.exe'))) {
+    throw "Не найден MetadataDel.exe в '$PublishDir'. Сначала выполните dotnet publish."
 }
-
 $resolvedPublishDir = (Resolve-Path $PublishDir).Path
-$wixCli = Get-Command wix -ErrorAction SilentlyContinue
-if (-not $wixCli) {
-    Write-Error "Команда 'wix' не найдена. Установите WiX Toolset 4 CLI: 'dotnet tool install --global wix'."
-    exit 1
+if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
+    throw 'Нужен WiX Toolset 5 или новее: dotnet tool install --global wix --version 5.0.2'
 }
-
-$harvestFile = Join-Path $PSScriptRoot 'PublishFiles.wxs'
-
-wix harvest dir $resolvedPublishDir `
-    -var PublishDir `
-    -cg PublishFiles `
-    -dr INSTALLFOLDER `
-    -o $harvestFile `
-    --bindpath $resolvedPublishDir
-
-$msiName = "MetadataDel-$Version.msi"
-$msiPath = Join-Path $PSScriptRoot $msiName
-
-wix build `
-    (Join-Path $PSScriptRoot 'MetadataDel.wxs') `
-    $harvestFile `
+$msiPath = Join-Path $PSScriptRoot "MetadataDel-$Version.msi"
+wix build (Join-Path $PSScriptRoot 'MetadataDel.wxs') `
     -arch x64 `
-    -ext WixToolset.UI.wixext `
-    -dProductVersion=$Version `
-    -dPublishDir=$resolvedPublishDir `
+    -d "ProductVersion=$Version" `
+    -d "PublishDir=$resolvedPublishDir" `
     -o $msiPath
-
-Write-Host "MSI создан:" $msiPath
+if ($LASTEXITCODE -ne 0) { throw "WiX завершился с кодом $LASTEXITCODE" }
+Write-Host 'MSI создан:' $msiPath

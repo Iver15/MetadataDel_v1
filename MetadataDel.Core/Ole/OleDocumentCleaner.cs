@@ -3,59 +3,55 @@ using MetadataDel.Core.Cleaning;
 
 namespace MetadataDel.Core.Ole;
 
-/// <summary>
-/// Очиститель метаданных для OLE Compound Document файлов (.doc, .xls)
-/// через прямую работу с OLE-структурой. Не требует установленного Office.
-/// </summary>
+/// <summary>Очищает корневые OLE property streams без установленного Office.</summary>
 public sealed class OleDocumentCleaner : IFileCleaner
 {
+    /// <inheritdoc />
     public Task<CleanResult> CleanAsync(string path, CleanOptions options, CancellationToken ct = default)
     {
         try
         {
-            if (options.Backup)
+            using var transaction = new FileCleaningTransaction(path, options, ct);
+            var rebuilt = transaction.WorkingPath + ".rebuilt";
+            try
             {
-                File.Copy(path, path + ".bak", overwrite: true);
-            }
-
-            using (var cf = new CompoundFile(path, CFSUpdateMode.Update, CFSConfiguration.Default))
-            {
-                // Собираем имена всех стримов/сторажей в корне
-                var toDelete = new List<string>();
-                cf.RootStorage.VisitEntries(item =>
+                // Copy live entries into a fresh container; free sectors must not retain deleted properties.
+                using (var source = RootStorage.OpenRead(transaction.WorkingPath))
                 {
-                    // OLE property set потоки начинаются с \x05
-                    if (item.Name.StartsWith("\x05"))
-                    {
-                        toDelete.Add(item.Name);
-                    }
-                }, recursive: false);
-
-                foreach (var name in toDelete)
-                {
-                    try { cf.RootStorage.Delete(name); } catch { }
+                    source.BaseStream.Position = 26;
+                    var version = (OpenMcdf.Version)source.BaseStream.ReadByte();
+                    using var destination = RootStorage.Create(rebuilt, version);
+                    CopyStorage(source, destination, removeProperties: true, ct);
                 }
-
-                cf.Commit();
+                File.Move(rebuilt, transaction.WorkingPath, overwrite: true);
+                transaction.Commit(ct);
             }
-
-            if (options.WipeFsTimestamps)
-            {
-                try
-                {
-                    var ts = new DateTime(1980, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-                    File.SetCreationTimeUtc(path, ts);
-                    File.SetLastWriteTimeUtc(path, ts);
-                    File.SetLastAccessTimeUtc(path, ts);
-                }
-                catch { }
-            }
-
-            return Task.FromResult(new CleanResult(path, true));
+            finally { if (File.Exists(rebuilt)) File.Delete(rebuilt); }
+            return Task.FromResult(new CleanResult(path, true,
+                FileCleaningTransaction.WipeTimestamps(path, options.WipeFsTimestamps)));
         }
         catch (Exception ex)
         {
             return Task.FromResult(new CleanResult(path, false, ex.Message));
+        }
+    }
+
+    private static void CopyStorage(Storage source, Storage destination, bool removeProperties, CancellationToken ct)
+    {
+        destination.CLSID = source.CLSID;
+        destination.StateBits = source.StateBits;
+        foreach (var entry in source.EnumerateEntries())
+        {
+            ct.ThrowIfCancellationRequested();
+            if (removeProperties && entry.Name.StartsWith("\x05", StringComparison.Ordinal)) continue;
+            if (entry.Type == EntryType.Storage)
+                CopyStorage(source.OpenStorage(entry.Name), destination.CreateStorage(entry.Name), false, ct);
+            else if (entry.Type == EntryType.Stream)
+            {
+                using var input = source.OpenStream(entry.Name);
+                using var output = destination.CreateStream(entry.Name);
+                input.CopyTo(output);
+            }
         }
     }
 }

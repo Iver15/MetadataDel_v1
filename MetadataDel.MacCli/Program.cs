@@ -1,3 +1,4 @@
+using MetadataDel.Core.CommandLine;
 using System.Collections.Concurrent;
 using System.Text;
 using MetadataDel.Core.Audit;
@@ -12,10 +13,11 @@ namespace MetadataDel.MacCli;
 public static class Program
 {
     private static bool _logEnabled;
+    private static readonly object LogLock = new();
 
     public static async Task<int> Main(string[] args)
     {
-        if (args.Any(a => a.Equals("--help", StringComparison.OrdinalIgnoreCase) || a.Equals("-h", StringComparison.OrdinalIgnoreCase)))
+        if (HasArg(args, "--help") || HasArg(args, "-h"))
         {
             PrintUsage();
             return 0;
@@ -31,12 +33,17 @@ public static class Program
             return 2;
         }
 
-        if (HasArg(args, "--audit"))
+        CliArguments parsed;
+        try { parsed = CliArguments.Parse(args); }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
-            return RunAuditMode(args);
+            Console.Error.WriteLine(ex.Message);
+            return 2;
         }
-
-        var (options, paths) = ParseArgs(args);
+        _logEnabled = parsed.Log;
+        if (parsed.Audit) return RunAuditMode(parsed.Paths);
+        var options = parsed.Options;
+        var paths = parsed.Paths;
         if (paths.Count == 0)
         {
             PrintUsage();
@@ -120,66 +127,7 @@ public static class Program
     }
 
     private static bool HasArg(string[] args, string option) =>
-        args.Any(a => a.Equals(option, StringComparison.OrdinalIgnoreCase));
-
-    private static (CleanOptions options, List<string> paths) ParseArgs(string[] args)
-    {
-        var backup = false;
-        var aggressive = false;
-        var wipeFs = false;
-        var files = new List<string>();
-
-        foreach (var raw in args)
-        {
-            var argument = raw.Trim();
-            if (argument.StartsWith("--", StringComparison.Ordinal))
-            {
-                if (argument.StartsWith("--backup", StringComparison.OrdinalIgnoreCase))
-                {
-                    var parts = argument.Split('=', 2);
-                    backup = parts.Length == 1 ||
-                        parts[1].Equals("on", StringComparison.OrdinalIgnoreCase) ||
-                        parts[1].Equals("true", StringComparison.OrdinalIgnoreCase);
-                    continue;
-                }
-
-                if (argument.Equals("--log", StringComparison.OrdinalIgnoreCase))
-                {
-                    _logEnabled = true;
-                    continue;
-                }
-
-                if (argument.Equals("--aggressive-pdf", StringComparison.OrdinalIgnoreCase))
-                {
-                    aggressive = true;
-                    continue;
-                }
-
-                if (argument.Equals("--wipe-fs", StringComparison.OrdinalIgnoreCase) ||
-                    argument.Equals("--wipe-fs-timestamps", StringComparison.OrdinalIgnoreCase))
-                {
-                    wipeFs = true;
-                    continue;
-                }
-            }
-
-            var path = argument.Trim('"');
-            if (Directory.Exists(path))
-            {
-                var extensions = new[] { "*.pdf", "*.docx", "*.doc", "*.xlsx", "*.xls" };
-                foreach (var extension in extensions)
-                {
-                    files.AddRange(Directory.GetFiles(path, extension, SearchOption.AllDirectories));
-                }
-            }
-            else
-            {
-                files.Add(path);
-            }
-        }
-
-        return (new CleanOptions(backup, aggressive, wipeFs), files);
-    }
+        args.TakeWhile(a => a != "--").Any(a => a.Equals(option, StringComparison.OrdinalIgnoreCase));
 
     private static IServiceProvider BuildServiceProvider()
     {
@@ -243,21 +191,15 @@ public static class Program
             var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MetadataDel", "logs");
             Directory.CreateDirectory(dir);
             var file = Path.Combine(dir, DateTime.UtcNow.ToString("yyyy-MM-dd") + ".log");
-            File.AppendAllText(file, DateTime.UtcNow.ToString("o") + " " + message + Environment.NewLine);
+            lock (LogLock) File.AppendAllText(file, DateTime.UtcNow.ToString("o") + " " + message + Environment.NewLine);
         }
         catch
         {
         }
     }
 
-    private static int RunAuditMode(string[] args)
+    private static int RunAuditMode(List<string> paths)
     {
-        var paths = args
-            .Where(a => !a.Equals("--audit", StringComparison.OrdinalIgnoreCase))
-            .Select(a => a.Trim().Trim('"'))
-            .Where(a => !string.IsNullOrWhiteSpace(a))
-            .ToList();
-
         if (paths.Count == 0)
         {
             Console.Error.WriteLine("Для режима --audit укажите хотя бы один файл.");
@@ -314,7 +256,7 @@ internal static class UserErrorReportWriter
     {
         try
         {
-            var directory = Path.GetDirectoryName(path);
+            var directory = Path.GetDirectoryName(Path.GetFullPath(path));
             if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
             {
                 return null;

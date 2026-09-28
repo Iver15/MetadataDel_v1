@@ -32,7 +32,6 @@ echo "Publishing win-x64 build..."
   -p:PublishSingleFile=true \
   -p:IncludeNativeLibrariesForSelfExtract=true \
   -p:SelfContained=true \
-  -p:NuGetAudit=false \
   -o "$ROOT_DIR/publish"
 
 echo "Building Inno Setup installer..."

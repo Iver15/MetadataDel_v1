@@ -5,76 +5,37 @@ using MetadataDel.Core.OpenXml;
 
 namespace MetadataDel.Core.Excel;
 
-/// <summary>
-/// Очиститель метаданных для OpenXML Excel файлов (.xlsx).
-/// </summary>
+/// <summary>Очищает метаданные OpenXML, сохраняя оригинал при ошибке.</summary>
 public sealed class ExcelCleaner : IFileCleaner
 {
-    private const int MaxRetries = 5;
-    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(500);
-
     /// <inheritdoc />
     public async Task<CleanResult> CleanAsync(string path, CleanOptions options, CancellationToken ct = default)
     {
         try
         {
-            // Резервная копия до изменения
-            if (options.Backup)
+            using var transaction = new FileCleaningTransaction(path, options, ct);
+            using (var document = SpreadsheetDocument.Open(transaction.WorkingPath, true))
+                SpreadsheetPrivacySanitizer.Sanitize(document);
+            OpenXmlZipAttributes.Normalize(transaction.WorkingPath);
+            var audit = MetadataAuditService.Audit(transaction.WorkingPath);
+            for (var attempt = 0; ; attempt++)
             {
-                File.Copy(path, path + ".bak", overwrite: true);
-            }
-
-            // Открываем оригинал с retry — на сетевых дисках Explorer/антивирус
-            // могут кратковременно блокировать файл
-            for (int attempt = 0; ; attempt++)
-            {
-                try
+                try { transaction.Commit(ct); break; }
+                catch (IOException) when (attempt < 5)
                 {
-                    using (var document = SpreadsheetDocument.Open(path, true))
-                    {
-                        SpreadsheetPrivacySanitizer.Sanitize(document);
-                    }
-                    OpenXmlZipAttributes.Normalize(path);
-                    break;
-                }
-                catch (IOException) when (attempt < MaxRetries)
-                {
-                    await Task.Delay(RetryDelay, ct);
+                    await Task.Delay(500, ct);
                 }
             }
-
-            WipeFileSystemTimestamps(path, options.WipeFsTimestamps);
-
-            string? warning = null;
-            try
-            {
-                var audit = MetadataAuditService.Audit(path);
-                if (audit.HasSensitiveMetadata)
-                    warning = "После очистки остались признаки метаданных: " + audit.Summarize();
-            }
-            catch
-            {
-                // Аудит — проверочный шаг, не должен валить успешную очистку
-            }
-
-            return new CleanResult(path, true, warning);
+            var warnings = new List<string>();
+            if (audit.HasSensitiveMetadata)
+                warnings.Add("После очистки остались признаки метаданных: " + audit.Summarize());
+            var timestampWarning = FileCleaningTransaction.WipeTimestamps(path, options.WipeFsTimestamps);
+            if (timestampWarning != null) warnings.Add(timestampWarning);
+            return new CleanResult(path, true, warnings.Count == 0 ? null : string.Join(" ", warnings));
         }
         catch (Exception ex)
         {
             return new CleanResult(path, false, ex.Message);
         }
-    }
-
-    private static void WipeFileSystemTimestamps(string path, bool wipeFsTimestamps)
-    {
-        if (!wipeFsTimestamps) return;
-        try
-        {
-            var ts = new DateTime(1980, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-            File.SetCreationTimeUtc(path, ts);
-            File.SetLastWriteTimeUtc(path, ts);
-            File.SetLastAccessTimeUtc(path, ts);
-        }
-        catch { }
     }
 }
