@@ -56,7 +56,7 @@ node_modules/
 Landing/node_modules/
 
 # Exiftool large sources (keep only what we ship)
-Exiftool/
+/Exiftool/
 !MetadataDel.Cli/tools/
 !publish/tools/
 !publish-mac/tools/
