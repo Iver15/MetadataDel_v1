@@ -6,6 +6,9 @@ SUPPORT_SCRIPT="$HOME/Library/Application Support/MetadataDel/finder-action.sh"
 
 rm -rf "$WORKFLOW_DIR"
 rm -f "$SUPPORT_SCRIPT" "$HOME/Library/Application Support/MetadataDel/command-path"
+# Журналы содержат пути очищенных файлов, поэтому удаляются вместе с программой.
+rm -rf "$HOME/Library/Application Support/MetadataDel/logs" "$HOME/Library/Logs/MetadataDel"
+rmdir "$HOME/Library/Application Support/MetadataDel" 2>/dev/null || true
 
 if [ -x /System/Library/CoreServices/pbs ]; then
   /System/Library/CoreServices/pbs -flush >/dev/null 2>&1 || true

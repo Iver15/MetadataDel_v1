@@ -2,7 +2,7 @@
 <?ifndef ProductVersion?>
 <?define ProductVersion=1.0.0?>
 <?endif?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Package
     Name="MetadataDel"
     Language="1049"
@@ -22,8 +22,18 @@
       <ComponentRef Id="CtxMenuBaseRegistry" />
       <ComponentRef Id="CtxMenuWordRegistry" />
       <ComponentRef Id="CtxMenuExcelRegistry" />
+      <ComponentRef Id="UserLogsCleanup" />
     </Feature>
   </Package>
+
+  <!-- Журналы содержат пути очищенных файлов; удаляются из профиля пользователя, который удаляет программу. -->
+  <Fragment>
+    <SetProperty Id="MDEL_USER_LOGS" Value="[LocalAppDataFolder]MetadataDel\logs" After="AppSearch" Sequence="both" />
+    <Component Id="UserLogsCleanup" Directory="INSTALLFOLDER" Guid="{3B0E7C2A-6E55-4C1B-9A57-2B3E9C6D8F14}">
+      <RegistryValue Root="HKLM" Key="SOFTWARE\MetadataDel" Name="LogsCleanup" Type="integer" Value="1" KeyPath="yes" />
+      <util:RemoveFolderEx On="uninstall" Property="MDEL_USER_LOGS" />
+    </Component>
+  </Fragment>
 
   <Fragment>
     <StandardDirectory Id="ProgramFiles64Folder">

@@ -16,27 +16,8 @@ MetadataDel распространяется по лицензии GNU Affero Ge
 | `DocumentFormat.OpenXml` 3.0.2 | Очистка `.docx` и `.xlsx` | MIT |
 | `System.IO.Packaging` 8.0.1 | Работа с OpenXML-пакетами | MIT |
 | `OpenMcdf` 3.1.4 | Очистка OLE-документов `.doc` и `.xls` | MPL-2.0 |
-| `Microsoft.Office.Interop.Word` | Windows-target сборка, совместимость с Word Interop | Пакет NuGet без явного license expression в `.nuspec`; используется только в `net8.0-windows` |
-| `Microsoft.Office.Interop.Excel` | Windows-target сборка, совместимость с Excel Interop | Пакет NuGet без явного license expression в `.nuspec`; используется только в `net8.0-windows` |
 | `xunit`, `Microsoft.NET.Test.Sdk` | Тестовый проект | Не входят в пользовательский дистрибутив |
-
-## Встроенный ExifTool для Windows
-
-Windows-дистрибутив может включать:
-
-- `MetadataDel.Cli/tools/win/exiftool.exe`;
-- `MetadataDel.Cli/tools/win/exiftool_files/`.
-
-Этот набор основан на:
-
-- ExifTool by Phil Harvey: https://exiftool.org/
-- Strawberry Perl: https://strawberryperl.com/
-- Windows launcher by Oliver Betz: https://oliverbetz.de/pages/Artikel/ExifTool-for-Windows
-
-Лицензионные файлы Windows-пакета поставляются рядом с бинарником в `MetadataDel.Cli/tools/win/exiftool_files/`.
 
 ## Примечание о распространении
 
-При публикации исходного кода и бинарных сборок нужно сохранять лицензию AGPL, предоставлять доступ к исходному коду соответствующей версии и не удалять лицензионные файлы, которые поставляются рядом с встроенным `exiftool`.
-
-Модули `tools/win/exiftool_files/lib/Image/ExifTool/` восстановлены из официального [тега ExifTool 13.52](https://github.com/exiftool/exiftool/tree/13.52/lib/Image/ExifTool), без изменения исходников.
+При публикации исходного кода и бинарных сборок нужно сохранять лицензию AGPL и предоставлять доступ к исходному коду соответствующей версии.

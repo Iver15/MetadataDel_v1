@@ -144,19 +144,6 @@ internal static class UserErrorReportWriter
                 });
         }
 
-        if (text.Contains("exiftool"))
-        {
-            return (
-                "Не удалось закончить полную очистку PDF.",
-                "Один из внутренних этапов очистки PDF завершился с ошибкой.",
-                new[]
-                {
-                    "Попробуйте ещё раз.",
-                    "Если ошибка повторяется, переустановите программу.",
-                    "Если PDF открывается нормально, пересохраните его как новый файл и повторите очистку."
-                });
-        }
-
         if (extension is ".docx" or ".xlsx" && (text.Contains("package") || text.Contains("xml") || text.Contains("openxml")))
         {
             return (

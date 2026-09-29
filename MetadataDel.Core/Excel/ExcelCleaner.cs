@@ -14,8 +14,9 @@ public sealed class ExcelCleaner : IFileCleaner
         try
         {
             using var transaction = new FileCleaningTransaction(path, options, ct);
+            var context = new OpenXmlSanitizeContext(ct);
             using (var document = SpreadsheetDocument.Open(transaction.WorkingPath, true))
-                SpreadsheetPrivacySanitizer.Sanitize(document);
+                SpreadsheetPrivacySanitizer.Sanitize(document, context);
             OpenXmlZipAttributes.Normalize(transaction.WorkingPath);
             var audit = MetadataAuditService.Audit(transaction.WorkingPath);
             for (var attempt = 0; ; attempt++)
@@ -26,7 +27,7 @@ public sealed class ExcelCleaner : IFileCleaner
                     await Task.Delay(500, ct);
                 }
             }
-            var warnings = new List<string>();
+            var warnings = new List<string>(context.Warnings);
             if (audit.HasSensitiveMetadata)
                 warnings.Add("После очистки остались признаки метаданных: " + audit.Summarize());
             var timestampWarning = FileCleaningTransaction.WipeTimestamps(path, options.WipeFsTimestamps);

@@ -314,27 +314,3 @@ public sealed partial class MetadataCleaningTests
         Assert.Contains(audit.Findings, f => f.Description.Contains("CreationDate"));
     }
 }
-
-public sealed partial class MetadataCleaningTests
-{
-    [Fact]
-    public async Task Pdf_ExiftoolDrainsBothOutputStreams()
-    {
-        if (OperatingSystem.IsWindows()) return;
-        var path = Path.Combine(_tempDirectory, "process.pdf");
-        CreatePdf(path);
-        var tool = Path.Combine(_tempDirectory, "fake-exiftool");
-        File.WriteAllText(tool, "#!/bin/sh\n/usr/bin/yes output | /usr/bin/head -c 262144\n/usr/bin/yes error | /usr/bin/head -c 262144 >&2\nexit 0\n");
-        File.SetUnixFileMode(tool, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        var previous = Environment.GetEnvironmentVariable("EXIFTOOL_PATH");
-        try
-        {
-            Environment.SetEnvironmentVariable("EXIFTOOL_PATH", tool);
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var result = await new PdfCleaner().CleanAsync(path, new CleanOptions(AggressivePdf: true), timeout.Token);
-            Assert.True(result.Success, result.Message);
-            Assert.Null(result.Message);
-        }
-        finally { Environment.SetEnvironmentVariable("EXIFTOOL_PATH", previous); }
-    }
-}

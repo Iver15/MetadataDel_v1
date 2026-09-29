@@ -37,8 +37,6 @@ python3 scripts/render_windows_icon.py icon.svg MetadataDel.Cli/app.ico
 ```text
 MetadataDel.exe
 app.ico
-tools/win/exiftool.exe
-tools/win/exiftool_files/
 ```
 
 - Собрать установщик:

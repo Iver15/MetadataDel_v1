@@ -63,13 +63,10 @@ public static class Program
         var results = new ConcurrentBag<bool>();
         var parallelism = Math.Max(1, Environment.ProcessorCount);
         using var semaphore = new SemaphoreSlim(parallelism);
-        using var officeSemaphore = new SemaphoreSlim(1);
 
         var tasks = paths.Select(async path =>
         {
-            var ext = Path.GetExtension(path).ToLowerInvariant();
-            var currentSemaphore = UsesOfficeInterop(ext) ? officeSemaphore : semaphore;
-            await currentSemaphore.WaitAsync();
+            await semaphore.WaitAsync();
 
             try
             {
@@ -119,7 +116,7 @@ public static class Program
             }
             finally
             {
-                currentSemaphore.Release();
+                semaphore.Release();
             }
         });
 
@@ -277,7 +274,7 @@ public static class Program
                              "Служебные режимы Windows: --install | --uninstall | --install-shell | --uninstall-shell | --diagnostics\n" +
                              "Примеры:\n" +
                              "  MetadataDel.exe --log --backup=on file.pdf file.docx\n" +
-                             "  MetadataDel.exe --aggressive-pdf --wipe-fs \"D:\\docs\"";
+                             "  MetadataDel.exe --wipe-fs \"D:\\docs\"";
         Console.Error.WriteLine(usage);
     }
 
@@ -293,9 +290,6 @@ public static class Program
 
         return new SimpleServiceProvider(services);
     }
-
-    private static bool UsesOfficeInterop(string extension) =>
-        extension is ".doc" or ".xls";
 
     private static void WriteFailure(string message)
     {
@@ -401,14 +395,7 @@ internal static class SelfInstaller
     private const string UninstallEntryName = "MetadataDel";
     private const string UninstallLauncherFileName = "Удалить MetadataDel.cmd";
 
-    private static readonly ShellVerbDefinition[] ShellVerbs =
-    {
-        new(".pdf", RequiredApplication.None),
-        new(".docx", RequiredApplication.None),
-        new(".xlsx", RequiredApplication.None),
-        new(".xls", RequiredApplication.None),
-        new(".doc", RequiredApplication.None)
-    };
+    private static readonly string[] ShellExtensions = { ".pdf", ".docx", ".xlsx", ".xls", ".doc" };
 
     public static InstallSummary Install()
     {
@@ -429,13 +416,11 @@ internal static class SelfInstaller
                 var iconSource = Path.Combine(currentExeDirectory, "app.ico");
                 if (File.Exists(iconSource)) File.Copy(iconSource, Path.Combine(installDirectory, "app.ico"), overwrite: true);
 
-                // Копируем сопутствующие файлы (tools/win/exiftool и т.п.)
-                // из папки рядом с exe, а не из AppContext.BaseDirectory
-                var toolsSource = Path.Combine(currentExeDirectory, "tools");
-                var toolsDest = Path.Combine(installDirectory, "tools");
-                if (Directory.Exists(toolsSource))
+                // Прежние версии ставили exiftool в tools; очистка PDF больше его не использует.
+                var staleTools = Path.Combine(installDirectory, "tools");
+                if (Directory.Exists(staleTools))
                 {
-                    MirrorDirectory(toolsSource, toolsDest);
+                    try { Directory.Delete(staleTools, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
                 }
             }
         }
@@ -461,9 +446,9 @@ internal static class SelfInstaller
 
     public static UninstallSummary Uninstall(bool removeFiles)
     {
-        foreach (var verb in ShellVerbs)
+        foreach (var extension in ShellExtensions)
         {
-            UnregisterVerb(verb.Extension);
+            UnregisterVerb(extension);
         }
         UnregisterDirectoryVerb();
         DeleteSendToShortcut();
@@ -473,6 +458,7 @@ internal static class SelfInstaller
         var removalScheduled = false;
 
         if (removeFiles) DeleteUninstallEntry();
+        if (removeFiles) DeleteLogs();
         if (removeFiles && Directory.Exists(installDirectory))
         {
             DeleteUninstallLauncher(installDirectory);
@@ -492,26 +478,21 @@ internal static class SelfInstaller
         return new UninstallSummary(installDirectory, filesRemoved, removalScheduled);
     }
 
-    public static InstallationDiagnostics GetDiagnostics()
+    // Журналы содержат пути очищенных файлов, поэтому удаляются вместе с программой.
+    private static void DeleteLogs()
     {
-        var availability = DetectOfficeAvailability();
-        var registerableExtensions = new List<string>();
-        var warnings = new List<string>();
-
-        foreach (var verb in ShellVerbs)
+        var appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), AppName);
+        try
         {
-            if (IsSupported(verb, availability))
-            {
-                registerableExtensions.Add(verb.Extension);
-            }
-            else
-            {
-                warnings.Add(GetMissingDependencyMessage(verb));
-            }
+            var logs = Path.Combine(appData, "logs");
+            if (Directory.Exists(logs)) Directory.Delete(logs, recursive: true);
+            if (Directory.Exists(appData) && !Directory.EnumerateFileSystemEntries(appData).Any()) Directory.Delete(appData);
         }
-
-        return new InstallationDiagnostics(registerableExtensions, warnings);
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
+
+    public static InstallationDiagnostics GetDiagnostics() =>
+        new(ShellExtensions, Array.Empty<string>());
 
     private static InstallSummary InstallShellIntegration(string exePath, string installDirectory)
     {
@@ -520,22 +501,13 @@ internal static class SelfInstaller
             throw new FileNotFoundException("Не найден исполняемый файл для регистрации контекстного меню.", exePath);
         }
 
-        var availability = DetectOfficeAvailability();
         var registeredExtensions = new List<string>();
         var warnings = new List<string>();
 
-        foreach (var verb in ShellVerbs)
+        foreach (var extension in ShellExtensions)
         {
-            if (IsSupported(verb, availability))
-            {
-                RegisterVerb(verb.Extension, exePath);
-                registeredExtensions.Add(verb.Extension);
-            }
-            else
-            {
-                UnregisterVerb(verb.Extension);
-                warnings.Add(GetMissingDependencyMessage(verb));
-            }
+            RegisterVerb(extension, exePath);
+            registeredExtensions.Add(extension);
         }
 
         // Контекстное меню для папок
@@ -549,38 +521,6 @@ internal static class SelfInstaller
 
     private static string GetUninstallRegistryPath() =>
         $@"Software\Microsoft\Windows\CurrentVersion\Uninstall\{UninstallEntryName}";
-
-    private static OfficeAvailability DetectOfficeAvailability() =>
-        new(IsProgIdAvailable("Word.Application"), IsProgIdAvailable("Excel.Application"));
-
-    private static bool IsProgIdAvailable(string progId)
-    {
-        try
-        {
-            return Type.GetTypeFromProgID(progId, throwOnError: false) != null;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool IsSupported(ShellVerbDefinition verb, OfficeAvailability availability) =>
-        verb.RequiredApplication switch
-        {
-            RequiredApplication.None => true,
-            RequiredApplication.Word => availability.WordInstalled,
-            RequiredApplication.Excel => availability.ExcelInstalled,
-            _ => false
-        };
-
-    private static string GetMissingDependencyMessage(ShellVerbDefinition verb) =>
-        verb.RequiredApplication switch
-        {
-            RequiredApplication.Word => $"Контекстное меню для {verb.Extension} не добавлено: Microsoft Word не найден.",
-            RequiredApplication.Excel => $"Контекстное меню для {verb.Extension} не добавлено: Microsoft Excel не найден.",
-            _ => $"Контекстное меню для {verb.Extension} не добавлено."
-        };
 
     private static void RegisterVerb(string extension, string exePath)
     {
@@ -693,41 +633,6 @@ internal static class SelfInstaller
         }
     }
 
-    private static void MirrorDirectory(string sourceDirectory, string destinationDirectory)
-    {
-        Directory.CreateDirectory(destinationDirectory);
-
-        foreach (var destinationFile in Directory.GetFiles(destinationDirectory, "*", SearchOption.TopDirectoryOnly))
-        {
-            var sourceFile = Path.Combine(sourceDirectory, Path.GetFileName(destinationFile));
-            if (!File.Exists(sourceFile))
-            {
-                File.Delete(destinationFile);
-            }
-        }
-
-        foreach (var destinationSubdirectory in Directory.GetDirectories(destinationDirectory, "*", SearchOption.TopDirectoryOnly))
-        {
-            var sourceSubdirectory = Path.Combine(sourceDirectory, Path.GetFileName(destinationSubdirectory));
-            if (!Directory.Exists(sourceSubdirectory))
-            {
-                Directory.Delete(destinationSubdirectory, recursive: true);
-            }
-        }
-
-        foreach (var sourceFile in Directory.GetFiles(sourceDirectory, "*", SearchOption.TopDirectoryOnly))
-        {
-            var destinationFile = Path.Combine(destinationDirectory, Path.GetFileName(sourceFile));
-            File.Copy(sourceFile, destinationFile, overwrite: true);
-        }
-
-        foreach (var sourceSubdirectory in Directory.GetDirectories(sourceDirectory, "*", SearchOption.TopDirectoryOnly))
-        {
-            var destinationSubdirectory = Path.Combine(destinationDirectory, Path.GetFileName(sourceSubdirectory));
-            MirrorDirectory(sourceSubdirectory, destinationSubdirectory);
-        }
-    }
-
     private static bool ScheduleDirectoryRemoval(string directoryPath)
     {
         var scriptPath = Path.Combine(Path.GetTempPath(), $"mdel-uninstall-{Guid.NewGuid():N}.cmd");
@@ -779,14 +684,4 @@ internal static class SelfInstaller
     internal sealed record InstallSummary(string InstallDirectory, IReadOnlyList<string> RegisteredExtensions, IReadOnlyList<string> Warnings);
     internal sealed record UninstallSummary(string InstallDirectory, bool FilesRemoved, bool RemovalScheduled);
     internal sealed record InstallationDiagnostics(IReadOnlyList<string> RegisterableExtensions, IReadOnlyList<string> Warnings);
-
-    private readonly record struct OfficeAvailability(bool WordInstalled, bool ExcelInstalled);
-    private readonly record struct ShellVerbDefinition(string Extension, RequiredApplication RequiredApplication);
-
-    private enum RequiredApplication
-    {
-        None,
-        Word,
-        Excel
-    }
 }

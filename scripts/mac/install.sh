@@ -44,11 +44,6 @@ if [ -z "$DOTNET_BIN" ]; then
   exit 1
 fi
 
-if ! command -v exiftool >/dev/null 2>&1; then
-  echo "[WARN] exiftool не найден. PDF будет очищаться базово, но для полной дочистки установите:" >&2
-  echo "       brew install exiftool" >&2
-fi
-
 PUBLISH_DIR="./publish-mac"
 if [ "$RID" = "osx-x64" ]; then
   PUBLISH_DIR="./publish-mac-x64"
@@ -87,7 +82,7 @@ case ":$PATH:" in
 esac
 
 echo "Проверка:"
-"$INSTALL_DIR/$COMMAND_NAME" --help >/dev/null
+"$INSTALL_DIR/$COMMAND_NAME" --help >/dev/null 2>&1
 echo "  $COMMAND_NAME --help"
 echo "  mdel --log --backup=on /path/to/file.pdf"
 

@@ -18,6 +18,7 @@ internal static class WordPrivacySanitizer
         "rPrChange", "pPrChange", "sectPrChange", "tblPrChange", "tblGridChange", "trPrChange", "tcPrChange",
         "del", "delText", "moveFrom", "moveFromRangeStart", "moveFromRangeEnd",
         "moveToRangeStart", "moveToRangeEnd", "commentRangeStart", "commentRangeEnd",
+        "printerSettings",
         "commentReference", "customXmlDelRangeStart", "customXmlDelRangeEnd",
         "customXmlInsRangeStart", "customXmlInsRangeEnd", "customXmlMoveFromRangeStart",
         "customXmlMoveFromRangeEnd", "customXmlMoveToRangeStart", "customXmlMoveToRangeEnd"
@@ -26,7 +27,7 @@ internal static class WordPrivacySanitizer
     private static readonly HashSet<string> SettingsPrivacyElements = new(StringComparer.OrdinalIgnoreCase)
     {
         "trackRevisions", "rsids", "attachedTemplate", "docVars", "mailMerge",
-        "removePersonalInformation", "removeDateAndTime", "writeReservation"
+        "removePersonalInformation", "removeDateAndTime", "writeReservation", "docId", "saveThroughXslt"
     };
 
     private static readonly HashSet<string> ContentControlMetadataElements = new(StringComparer.OrdinalIgnoreCase)
@@ -34,19 +35,12 @@ internal static class WordPrivacySanitizer
         "alias", "tag", "dataBinding", "placeholder", "temporary", "showingPlcHdr"
     };
 
-    public static void Sanitize(WordprocessingDocument document)
+    public static void Sanitize(WordprocessingDocument document, OpenXmlSanitizeContext context)
     {
-        CleanPackageProperties(document.PackageProperties);
-        CleanExtendedProperties(document.ExtendedFilePropertiesPart?.Properties);
-
-        if (document.CustomFilePropertiesPart != null)
-        {
-            document.DeletePart(document.CustomFilePropertiesPart);
-        }
-
         var mainPart = document.MainDocumentPart;
         if (mainPart == null)
         {
+            OpenXmlPackageSanitizer.Sanitize(document, context);
             return;
         }
 
@@ -66,6 +60,21 @@ internal static class WordPrivacySanitizer
             mainPart.DeletePart(mainPart.WordprocessingPeoplePart);
         }
 
+        if (mainPart.WordCommentsExtensiblePart != null)
+        {
+            mainPart.DeletePart(mainPart.WordCommentsExtensiblePart);
+        }
+
+        if (mainPart.WordprocessingCommentsIdsPart != null)
+        {
+            mainPart.DeletePart(mainPart.WordprocessingCommentsIdsPart);
+        }
+
+        foreach (var printerSettings in mainPart.WordprocessingPrinterSettingsParts.ToList())
+        {
+            mainPart.DeletePart(printerSettings);
+        }
+
         if (mainPart.DocumentSettingsPart?.MailMergeRecipientDataPart != null)
         {
             mainPart.DocumentSettingsPart.DeletePart(mainPart.DocumentSettingsPart.MailMergeRecipientDataPart);
@@ -74,12 +83,36 @@ internal static class WordPrivacySanitizer
         if (mainPart.DocumentSettingsPart != null)
         {
             OpenXmlPartXml.Update(mainPart.DocumentSettingsPart, SanitizeSettingsXml);
+
+            // Ссылки на шаблон и источники слияния после удаления элементов не нужны, но хранят локальные пути.
+            foreach (var relationship in mainPart.DocumentSettingsPart.ExternalRelationships.ToList())
+            {
+                mainPart.DocumentSettingsPart.DeleteExternalRelationship(relationship);
+            }
         }
 
         foreach (var part in EnumerateSanitizedParts(mainPart))
         {
             OpenXmlPartXml.Update(part, SanitizePartXml);
         }
+
+        var hiddenStyles = WordHiddenContent.LoadHiddenStyles(mainPart.StyleDefinitionsPart);
+        var removedHiddenRuns = 0;
+        foreach (var part in WordHiddenContent.EnumerateContentParts(mainPart))
+        {
+            OpenXmlPartXml.Update(part, xml =>
+            {
+                var removed = WordHiddenContent.RemoveHiddenRuns(xml, hiddenStyles, out var count);
+                removedHiddenRuns += count;
+                return WordHiddenContent.RewriteFieldPaths(xml) | removed;
+            });
+        }
+        if (removedHiddenRuns > 0)
+        {
+            context.Warn("Удалён скрытый текст Word.");
+        }
+
+        OpenXmlPackageSanitizer.Sanitize(document, context);
     }
 
     internal static bool HasResidualMetadata(WordprocessingDocument document, IList<string> findings)
@@ -100,7 +133,9 @@ internal static class WordPrivacySanitizer
 
         if (mainPart.WordprocessingCommentsPart != null ||
             mainPart.WordprocessingCommentsExPart != null ||
-            mainPart.WordprocessingPeoplePart != null)
+            mainPart.WordprocessingPeoplePart != null ||
+            mainPart.WordCommentsExtensiblePart != null ||
+            mainPart.WordprocessingCommentsIdsPart != null)
         {
             findings.Add("комментарии или авторы комментариев");
         }
@@ -113,6 +148,16 @@ internal static class WordPrivacySanitizer
         if (mainPart.DocumentSettingsPart?.MailMergeRecipientDataPart != null)
         {
             findings.Add("данные mail merge");
+        }
+
+        if (mainPart.DocumentSettingsPart?.ExternalRelationships.Any() == true)
+        {
+            findings.Add("ссылка на шаблон или источник слияния");
+        }
+
+        if (mainPart.WordprocessingPrinterSettingsParts.Any())
+        {
+            findings.Add("настройки принтера");
         }
 
         var settingsXml = mainPart.DocumentSettingsPart is null ? null : OpenXmlPartXml.TryLoad(mainPart.DocumentSettingsPart);
@@ -134,6 +179,26 @@ internal static class WordPrivacySanitizer
             {
                 findings.Add("следы правок или комментариев");
                 break;
+            }
+        }
+
+        var hiddenStyles = WordHiddenContent.LoadHiddenStyles(mainPart.StyleDefinitionsPart);
+        foreach (var part in WordHiddenContent.EnumerateContentParts(mainPart))
+        {
+            var documentXml = OpenXmlPartXml.TryLoad(part);
+            if (documentXml == null)
+            {
+                continue;
+            }
+
+            if (WordHiddenContent.FindHiddenRuns(documentXml, hiddenStyles).Count > 0)
+            {
+                findings.Add("скрытый текст");
+            }
+
+            if (WordHiddenContent.HasLocalFieldPaths(documentXml))
+            {
+                findings.Add("локальные пути в кодах полей");
             }
         }
 
@@ -178,6 +243,29 @@ internal static class WordPrivacySanitizer
         {
             yield return mainPart.EndnotesPart;
         }
+
+        if (mainPart.StyleDefinitionsPart != null)
+        {
+            yield return mainPart.StyleDefinitionsPart;
+        }
+
+        if (mainPart.StylesWithEffectsPart != null)
+        {
+            yield return mainPart.StylesWithEffectsPart;
+        }
+
+        if (mainPart.NumberingDefinitionsPart != null)
+        {
+            yield return mainPart.NumberingDefinitionsPart;
+        }
+
+        var glossary = mainPart.GlossaryDocumentPart;
+        if (glossary != null)
+        {
+            yield return glossary;
+            if (glossary.StyleDefinitionsPart != null) yield return glossary.StyleDefinitionsPart;
+            if (glossary.NumberingDefinitionsPart != null) yield return glossary.NumberingDefinitionsPart;
+        }
     }
 
     private static bool SanitizePartXml(XDocument document)
@@ -191,6 +279,20 @@ internal static class WordPrivacySanitizer
         }
 
         foreach (var element in document.Descendants().Where(e => e.Parent?.Name.LocalName == "sdtPr" && ContentControlMetadataElements.Contains(e.Name.LocalName)).ToList())
+        {
+            element.Remove();
+            changed = true;
+        }
+
+        // Исключения из защиты от редактирования, выданные конкретным пользователям, содержат их учётные записи.
+        var personalPermissions = document.Descendants()
+            .Where(e => e.Name.LocalName == "permStart" && e.Attributes().Any(a => a.Name.LocalName == "ed"))
+            .ToList();
+        var personalPermissionIds = personalPermissions
+            .Select(e => e.Attributes().FirstOrDefault(a => a.Name.LocalName == "id")?.Value)
+            .OfType<string>().ToHashSet(StringComparer.Ordinal);
+        foreach (var element in personalPermissions.Concat(document.Descendants().Where(e => e.Name.LocalName == "permEnd" &&
+                     personalPermissionIds.Contains(e.Attributes().FirstOrDefault(a => a.Name.LocalName == "id")?.Value ?? "")).ToList()))
         {
             element.Remove();
             changed = true;
@@ -240,55 +342,6 @@ internal static class WordPrivacySanitizer
         {
             mainPart.DeletePart(part);
         }
-    }
-
-    private static void CleanPackageProperties(DocumentFormat.OpenXml.Packaging.IPackageProperties properties)
-    {
-        properties.Creator = null;
-        properties.LastModifiedBy = null;
-        properties.Title = null;
-        properties.Subject = null;
-        properties.Keywords = null;
-        properties.Description = null;
-        properties.Category = null;
-        properties.ContentStatus = null;
-        properties.Identifier = null;
-        properties.Version = null;
-        properties.Language = null;
-
-        try { properties.Created = null; } catch { }
-        try { properties.Modified = null; } catch { }
-        try { properties.LastPrinted = null; } catch { }
-        try { properties.Revision = null; } catch { }
-    }
-
-    private static void CleanExtendedProperties(DocumentFormat.OpenXml.ExtendedProperties.Properties? properties)
-    {
-        if (properties == null)
-        {
-            return;
-        }
-
-        try { properties.Company?.Remove(); } catch { }
-        try { properties.Manager?.Remove(); } catch { }
-        try { properties.Application?.Remove(); } catch { }
-        try { properties.HyperlinkBase?.Remove(); } catch { }
-        try { properties.TotalTime?.Remove(); } catch { }
-        try { properties.LinksUpToDate?.Remove(); } catch { }
-        try { properties.Template?.Remove(); } catch { }
-        try { properties.ApplicationVersion?.Remove(); } catch { }
-        try { properties.HeadingPairs?.Remove(); } catch { }
-        try { properties.TitlesOfParts?.Remove(); } catch { }
-        try { properties.Pages?.Remove(); } catch { }
-        try { properties.Words?.Remove(); } catch { }
-        try { properties.Characters?.Remove(); } catch { }
-        try { properties.Lines?.Remove(); } catch { }
-        try { properties.Paragraphs?.Remove(); } catch { }
-        try { properties.CharactersWithSpaces?.Remove(); } catch { }
-        try { properties.DocumentSecurity?.Remove(); } catch { }
-        try { properties.ScaleCrop?.Remove(); } catch { }
-        try { properties.SharedDocument?.Remove(); } catch { }
-        try { properties.HyperlinksChanged?.Remove(); } catch { }
     }
 
     private static void AuditPackageProperties(DocumentFormat.OpenXml.Packaging.IPackageProperties properties, IList<string> findings)

@@ -40,6 +40,10 @@ DisableReadyMemo=no
 ; Ожидается, что предварительно выполнен publish в каталог ..\publish
 Source: "{#MyPublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pdb,*.xml"
 
+[InstallDelete]
+; Прежние версии ставили exiftool в {app}\tools; очистка PDF больше его не использует.
+Type: filesandordirs; Name: "{app}\tools"
+
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
@@ -57,6 +61,9 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall-shell"; Flags: runhi
 
 [UninstallDelete]
 Type: files; Name: "{userappdata}\Microsoft\Windows\SendTo\{#MySendToFileName}"
+; Журналы содержат пути очищенных файлов, поэтому удаляются вместе с программой.
+Type: filesandordirs; Name: "{localappdata}\MetadataDel\logs"
+Type: dirifempty; Name: "{localappdata}\MetadataDel"
 
 [Icons]
 Name: "{group}\{#MyShortcutName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\app.ico"
@@ -75,7 +82,7 @@ begin
 
   WizardForm.WelcomeLabel2.Caption :=
     'Быстрая и аккуратная установка без ручной настройки.' + #13#10#13#10 +
-    'Setup установит программу, exiftool и подготовит интеграцию с Проводником.';
+    'Setup установит программу и подготовит интеграцию с Проводником.';
   WizardForm.WelcomeLabel2.Font.Name := 'Segoe UI';
 
   WizardForm.PageNameLabel.Font.Name := 'Segoe UI Semibold';
@@ -83,7 +90,7 @@ begin
   WizardForm.PageNameLabel.Font.Size := 12;
 
   WizardForm.PageDescriptionLabel.Font.Name := 'Segoe UI';
-  WizardForm.PageDescriptionLabel.Caption := 'Один установщик для программы, exiftool и интеграции с Проводником.';
+  WizardForm.PageDescriptionLabel.Caption := 'Один установщик для программы и интеграции с Проводником.';
 
   WizardForm.SelectTasksLabel.Caption := 'Выберите дополнительные действия:';
   WizardForm.ReadyLabel.Caption := 'Проверьте параметры установки. Когда всё готово, нажмите "Установить".';
@@ -139,7 +146,7 @@ begin
   else if CurPageID = wpReady then
   begin
     WizardForm.PageNameLabel.Caption := 'Всё готово к установке';
-    WizardForm.PageDescriptionLabel.Caption := 'MetadataDel будет установлен вместе с exiftool и нужными служебными файлами.';
+    WizardForm.PageDescriptionLabel.Caption := 'MetadataDel будет установлен вместе с нужными служебными файлами.';
     WizardForm.ReadyLabel.Caption := 'Нажмите "Установить", чтобы начать установку.';
   end
   else if CurPageID = wpFinished then
@@ -161,7 +168,6 @@ begin
   Result :=
     'Будет установлено:' + NewLine +
     Space + '- MetadataDel' + NewLine +
-    Space + '- exiftool и служебные файлы для глубокой очистки PDF' + NewLine +
     Space + '- интеграция с Проводником и пункт "Отправить" при выборе соответствующих опций' + NewLine + NewLine +
     'Папка установки:' + NewLine +
     Space + ExpandConstant('{app}');

@@ -1,6 +1,7 @@
-using System.Diagnostics;
+using System.Text;
 using MetadataDel.Core.Audit;
 using MetadataDel.Core.Cleaning;
+using MetadataDel.Core.Media;
 using iText.Kernel.Pdf;
 using iText.Kernel.Utils;
 using iText.Forms;
@@ -9,12 +10,20 @@ using iText.Forms.Fields;
 namespace MetadataDel.Core.Pdf;
 
 /// <summary>
-/// Очиститель метаданных PDF с пересборкой документа и опциональной агрессивной очисткой через exiftool.
+/// Очиститель метаданных PDF: пересобирает документ из страниц, поэтому старые версии и неиспользуемые объекты не переносятся.
 /// </summary>
 public sealed class PdfCleaner : IFileCleaner
 {
     private const int MaxRetries = 12;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(500);
+
+    internal static readonly PdfName PieceInfo = new("PieceInfo");
+    internal static readonly PdfName LastModified = new("LastModified");
+    internal static readonly PdfName Thumb = new("Thumb");
+    internal static readonly PdfName Beads = new("B");
+    internal static readonly PdfName Threads = new("Threads");
+    internal static readonly PdfName SpiderInfo = new("SpiderInfo");
+    internal static readonly PdfName Usage = new("Usage");
 
     /// <inheritdoc />
     public async Task<CleanResult> CleanAsync(string path, CleanOptions options, CancellationToken ct = default)
@@ -58,6 +67,9 @@ public sealed class PdfCleaner : IFileCleaner
                 using (var src = new PdfDocument(reader))
                 using (var dst = new PdfDocument(writer))
                 {
+                    // XMP, PieceInfo и EXIF картинок убираются до копирования: удалённые из словарей объекты
+                    // тогда не попадают в новый файл даже как неиспользуемые.
+                    ScrubObjects(src);
                     var merger = new PdfMerger(dst);
                     merger.Merge(src, 1, src.GetNumberOfPages());
 
@@ -80,14 +92,21 @@ public sealed class PdfCleaner : IFileCleaner
                     catalog.Remove(PdfName.MarkInfo);
                     catalog.Remove(PdfName.EmbeddedFiles);
                     catalog.Remove(new PdfName("AF"));
-                    catalog.Remove(new PdfName("PieceInfo"));
+                    catalog.Remove(PieceInfo);
+                    catalog.Remove(Threads);
+                    catalog.Remove(SpiderInfo);
+                    catalog.Remove(PdfName.Collection);
+                    catalog.Remove(PdfName.Perms);
+                    catalog.Remove(new PdfName("Legal"));
 
                     for (int i = 1; i <= dst.GetNumberOfPages(); i++)
                     {
                         var page = dst.GetPage(i);
                         page.GetPdfObject().Remove(PdfName.Metadata);
-                        page.GetPdfObject().Remove(new PdfName("PieceInfo"));
-                        page.GetPdfObject().Remove(new PdfName("LastModified"));
+                        page.GetPdfObject().Remove(PieceInfo);
+                        page.GetPdfObject().Remove(LastModified);
+                        page.GetPdfObject().Remove(Thumb);
+                        page.GetPdfObject().Remove(Beads);
                         page.GetPdfObject().Remove(PdfName.AA);
                         page.GetPdfObject().Remove(new PdfName("AF"));
                         var anns = page.GetAnnotations();
@@ -101,41 +120,29 @@ public sealed class PdfCleaner : IFileCleaner
                         try { acro.FlattenFields(); } catch { }
                         try { acro.SetNeedAppearances(false); } catch { }
                     }
+
+                    AnonymizeLayers(dst);
                 }
                 cleanedBytes = outputStream.ToArray();
             }
 
-            // iText AGPL принудительно вписывает Producer при Close().
-            // Патчим байты в памяти до записи на диск — заменяем содержимое
-            // строки Producer пробелами той же длины, чтобы не сломать xref.
-            // Limit byte edits to the Info object located by the PDF cross-reference table.
-            // Searching the whole file could alter page content containing /Producer.
-            using (var inspection = new PdfDocument(new PdfReader(new MemoryStream(cleanedBytes))))
-            {
-                var reference = inspection.GetTrailer().GetAsDictionary(PdfName.Info).GetIndirectReference();
-                var offset = checked((int)reference.GetOffset());
-                var infoBytes = cleanedBytes.AsSpan(offset).ToArray();
-                var end = System.Text.Encoding.ASCII.GetString(infoBytes).IndexOf("endobj", StringComparison.Ordinal);
-                if (end < 0) throw new InvalidDataException("Не найден конец Info-объекта PDF.");
-                var dictionary = infoBytes.AsSpan(0, end).ToArray();
-                BlankPdfStringValue(dictionary, "/Producer");
-                BlankPdfStringValue(dictionary, "/CreationDate");
-                BlankPdfStringValue(dictionary, "/ModDate");
-                dictionary.CopyTo(cleanedBytes, offset);
-            }
+            // iText (AGPL) при закрытии всегда пишет Producer, даты и служебный комментарий с версией.
+            // Правки байтов не меняют длину, поэтому таблица xref остаётся верной.
+            BlankInfoDictionary(cleanedBytes);
+            BlankProducerComment(cleanedBytes);
 
             var finalPath = path;
 
             try
             {
-                AddWarning(warnings, await PersistCleanedPdfAsync(path, cleanedBytes, options, ct));
+                AddWarning(warnings, await PersistCleanedPdfAsync(path, path, cleanedBytes, options, ct));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 var fallbackPath = GetFallbackCopyPath(path);
                 try
                 {
-                    AddWarning(warnings, await PersistCleanedPdfAsync(fallbackPath, cleanedBytes, options, ct));
+                    AddWarning(warnings, await PersistCleanedPdfAsync(fallbackPath, path, cleanedBytes, options, ct));
                     finalPath = fallbackPath;
                     warnings.Add($"Исходный PDF был занят другой программой, поэтому очищенная копия сохранена рядом: {fallbackPath}");
                 }
@@ -155,7 +162,7 @@ public sealed class PdfCleaner : IFileCleaner
         }
 	}
 
-    private static async Task<string?> PersistCleanedPdfAsync(string path, byte[] cleanedBytes, CleanOptions options, CancellationToken ct)
+    private static async Task<string?> PersistCleanedPdfAsync(string path, string permissionSource, byte[] cleanedBytes, CleanOptions options, CancellationToken ct)
     {
         var warnings = new List<string>();
 
@@ -166,15 +173,8 @@ public sealed class PdfCleaner : IFileCleaner
         path = temporaryPath;
         await File.WriteAllBytesAsync(path, cleanedBytes, ct);
 
-        // exiftool всегда пытается дочистить (ICC, Trailer и пр.)
-        // Producer уже удалён патчингом байтов, exiftool опционален
-        var exiftool = await RunExiftoolCleanupAsync(path, aggressive: true, ct);
-        if (!exiftool.Success && options.AggressivePdf)
-        {
-            // Предупреждаем только если пользователь явно просил aggressive
-            warnings.Add($"exiftool-очистка не удалась: {exiftool.Message}");
-        }
-
+        // exiftool здесь не используется: для PDF он дописывает инкрементальное обновление,
+        // и в файле остаётся предыдущая версия, а удалять после пересборки ему уже нечего.
         var audit = await TryAuditWithRetryAsync(path, ct);
         if (audit?.HasSensitiveMetadata == true)
         {
@@ -188,7 +188,7 @@ public sealed class PdfCleaner : IFileCleaner
             {
                 if (File.Exists(outputPath))
                     using (new FileStream(outputPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
-                File.Move(temporaryPath, outputPath, overwrite: true);
+                FileCleaningTransaction.Publish(temporaryPath, outputPath, permissionSource);
                 break;
             }
             catch (IOException) when (attempt < MaxRetries) { await Task.Delay(RetryDelay, ct); }
@@ -266,186 +266,92 @@ public sealed class PdfCleaner : IFileCleaner
         }
     }
 
-    private static async Task<CleanResult> RunExiftoolCleanupAsync(string path, bool aggressive, CancellationToken ct)
+    /// <summary>Убирает метаданные из объектов исходного документа до копирования страниц.</summary>
+    internal static void ScrubObjects(PdfDocument document)
     {
-        try
+        for (var number = 1; number < document.GetNumberOfPdfObjects(); number++)
         {
-            var exiftoolPath = ResolveExiftoolPath();
-            if (exiftoolPath == null)
+            if (document.GetPdfObject(number) is not PdfDictionary dictionary) continue;
+            dictionary.Remove(PdfName.Metadata);
+            dictionary.Remove(PieceInfo);
+            dictionary.Remove(LastModified);
+            if (PdfName.Page.Equals(dictionary.GetAsName(PdfName.Type)))
             {
-                return new CleanResult(path, false, "exiftool не найден. Установите exiftool или добавьте tools/win/exiftool.exe.");
+                dictionary.Remove(Thumb);
+                dictionary.Remove(Beads);
             }
-
-            var arguments = aggressive
-                ? "-overwrite_original -all= -Trailer:all= -ICC_Profile:all= "
-                : "-overwrite_original -all= ";
-
-            for (int attempt = 0; ; attempt++)
-            {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = exiftoolPath,
-                    UseShellExecute = false,
-                    RedirectStandardError = true,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true
-                };
-
-                foreach (var argument in arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-                    psi.ArgumentList.Add(argument);
-                psi.ArgumentList.Add("--");
-                psi.ArgumentList.Add(Path.GetFullPath(path));
-                using var process = Process.Start(psi);
-                if (process == null)
-                {
-                    return new CleanResult(path, false, "Не удалось запустить exiftool для очистки PDF.");
-                }
-
-                var stdout = process.StandardOutput.ReadToEndAsync();
-                var stderr = process.StandardError.ReadToEndAsync();
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(TimeSpan.FromSeconds(60));
-                try { await process.WaitForExitAsync(timeout.Token); }
-                catch (OperationCanceledException)
-                {
-                    if (!process.HasExited) process.Kill(entireProcessTree: true);
-                    await process.WaitForExitAsync(CancellationToken.None);
-                    await Task.WhenAll(stdout, stderr);
-                    ct.ThrowIfCancellationRequested();
-                    return new CleanResult(path, false, "exiftool превысил время ожидания (60 секунд).");
-                }
-                await Task.WhenAll(stdout, stderr);
-                if (process.ExitCode == 0)
-                {
-                    return new CleanResult(path, true);
-                }
-
-                var err = (await stderr).Trim();
-                if (attempt < MaxRetries && IsFileLockError(err))
-                {
-                    await Task.Delay(RetryDelay, ct);
-                    continue;
-                }
-
-                return new CleanResult(path, false, $"exiftool завершился с кодом {process.ExitCode}: {err}");
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return new CleanResult(path, false, $"Не удалось выполнить exiftool-очистку PDF: {ex.Message}");
+            if (dictionary is PdfStream stream && PdfName.Image.Equals(stream.GetAsName(PdfName.Subtype)))
+                StripImageMetadata(stream);
         }
     }
 
-    private static string? ResolveExiftoolPath()
+    /// <summary>JPEG и JPEG 2000 хранятся в PDF целиком, вместе с EXIF (GPS, камера) и XMP.</summary>
+    private static void StripImageMetadata(PdfStream stream)
     {
-        if (OperatingSystem.IsWindows())
-        {
-            var processPath = Environment.ProcessPath;
-            var processDirectory = string.IsNullOrWhiteSpace(processPath)
-                ? null
-                : Path.GetDirectoryName(processPath);
-            if (!string.IsNullOrWhiteSpace(processDirectory))
-            {
-                var bundled = Path.Combine(processDirectory, "tools", "win", "exiftool.exe");
-                if (File.Exists(bundled))
-                {
-                    return bundled;
-                }
-            }
-        }
-
-        var env = Environment.GetEnvironmentVariable("EXIFTOOL_PATH");
-        if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
-        {
-            return env;
-        }
-
-        return "exiftool";
+        var filter = GetSingleFilter(stream);
+        if (filter == null || !filter.Equals(PdfName.DCTDecode) && !filter.Equals(PdfName.JPXDecode)) return;
+        var stripped = ImageMetadata.Strip(stream.GetBytes(false));
+        if (stripped == null) return;
+        var decodeParms = stream.Get(PdfName.DecodeParms);
+        // SetData считает данные раскодированными и убирает фильтр — возвращаем его, чтобы байты не пережимались.
+        stream.SetData(stripped);
+        stream.Put(PdfName.Filter, filter);
+        if (decodeParms != null) stream.Put(PdfName.DecodeParms, decodeParms);
     }
 
-    private static bool IsFileLockError(string message)
+    internal static PdfName? GetSingleFilter(PdfStream stream) => stream.Get(PdfName.Filter) switch
     {
-        if (string.IsNullOrWhiteSpace(message))
+        PdfName name => name,
+        PdfArray array when array.Size() == 1 => array.GetAsName(0),
+        _ => null
+    };
+
+    /// <summary>Имена слоёв и сведения о создавшем их приложении заменяются нейтральными.</summary>
+    private static void AnonymizeLayers(PdfDocument document)
+    {
+        var properties = document.GetCatalog().GetPdfObject().GetAsDictionary(PdfName.OCProperties);
+        if (properties == null) return;
+        var groups = properties.GetAsArray(PdfName.OCGs);
+        for (var i = 0; i < (groups?.Size() ?? 0); i++)
         {
-            return false;
+            var group = groups!.GetAsDictionary(i);
+            if (group == null) continue;
+            group.Put(PdfName.Name, new PdfString($"Layer {i + 1}"));
+            group.Remove(Usage);
         }
-
-        var text = message.ToLowerInvariant();
-        return text.Contains("used by another process")
-            || text.Contains("being used by another process")
-            || text.Contains("process cannot access the file")
-            || text.Contains("file is locked")
-            || text.Contains("permission denied");
-    }
-
-    /// <summary>
-    /// Находит PDF-ключ (например /Producer) и затирает значение-строку пробелами.
-    /// Длина не меняется → xref-смещения остаются валидными.
-    /// </summary>
-    private static void BlankPdfStringValue(byte[] pdf, string key)
-    {
-        var keyBytes = System.Text.Encoding.ASCII.GetBytes(key);
-
-        for (int pos = 0; pos <= pdf.Length - keyBytes.Length; pos++)
+        var configurations = new List<PdfDictionary?> { properties.GetAsDictionary(PdfName.D) };
+        var extra = properties.GetAsArray(PdfName.Configs);
+        for (var i = 0; i < (extra?.Size() ?? 0); i++) configurations.Add(extra!.GetAsDictionary(i));
+        foreach (var configuration in configurations.OfType<PdfDictionary>())
         {
-            if (!MatchesAt(pdf, pos, keyBytes))
-                continue;
-
-            // Нашли ключ — ищем открывающую скобку '(' после него
-            int i = pos + keyBytes.Length;
-            while (i < pdf.Length && pdf[i] != (byte)'(' && pdf[i] != (byte)'/')
-                i++;
-
-            if (i >= pdf.Length || pdf[i] != (byte)'(')
-                continue;
-
-            // Затираем содержимое между ( и ) с учётом PDF-экранирования
-            i++; // пропускаем '('
-            int depth = 1;
-            while (i < pdf.Length && depth > 0)
-            {
-                if (pdf[i] == (byte)'\\')
-                {
-                    pdf[i] = (byte)' ';
-                    i++;
-                    if (i < pdf.Length)
-                        pdf[i] = (byte)' ';
-                }
-                else if (pdf[i] == (byte)'(')
-                {
-                    depth++;
-                    pdf[i] = (byte)' ';
-                }
-                else if (pdf[i] == (byte)')')
-                {
-                    depth--;
-                    if (depth > 0)
-                        pdf[i] = (byte)' ';
-                }
-                else
-                {
-                    pdf[i] = (byte)' ';
-                }
-
-                if (depth > 0) i++;
-            }
+            configuration.Remove(PdfName.Name);
+            configuration.Remove(PdfName.Creator);
         }
     }
 
-    private static bool MatchesAt(byte[] data, int offset, byte[] pattern)
+    /// <summary>Заменяет содержимое Info-словаря пробелами: остаётся пустой словарь &lt;&lt; &gt;&gt;.</summary>
+    private static void BlankInfoDictionary(byte[] pdf)
     {
-        if (offset + pattern.Length > data.Length)
-            return false;
-        for (int i = 0; i < pattern.Length; i++)
-        {
-            if (data[offset + i] != pattern[i])
-                return false;
-        }
-        return true;
+        // Правим только объект, на который указывает xref: поиск по всему файлу задел бы содержимое страниц.
+        using var inspection = new PdfDocument(new PdfReader(new MemoryStream(pdf)));
+        var reference = inspection.GetTrailer().GetAsDictionary(PdfName.Info)?.GetIndirectReference();
+        if (reference == null) return;
+        var offset = checked((int)reference.GetOffset());
+        var text = Encoding.Latin1.GetString(pdf, offset, Math.Min(pdf.Length - offset, 1 << 20));
+        var end = text.IndexOf("endobj", StringComparison.Ordinal);
+        if (end < 0) throw new InvalidDataException("Не найден конец Info-объекта PDF.");
+        var open = text.IndexOf("<<", StringComparison.Ordinal);
+        var close = text.LastIndexOf(">>", end, StringComparison.Ordinal);
+        if (open < 0 || close <= open) throw new InvalidDataException("Не найден словарь Info-объекта PDF.");
+        pdf.AsSpan(offset + open + 2, close - open - 2).Fill((byte)' ');
+    }
+
+    private static void BlankProducerComment(byte[] pdf)
+    {
+        var index = pdf.AsSpan().LastIndexOf("%iText"u8);
+        if (index < 0) return;
+        for (var i = index + 1; i < pdf.Length && pdf[i] is not ((byte)'\r' or (byte)'\n'); i++)
+            pdf[i] = (byte)' ';
     }
 
     private static void AddWarning(ICollection<string> warnings, string? warning)

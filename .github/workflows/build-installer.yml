@@ -33,15 +33,6 @@ jobs:
           -p:SelfContained=true
           -o ./publish
 
-      - name: Verify bundled ExifTool
-        shell: pwsh
-        run: |
-          if (-not (Test-Path publish/tools/win/exiftool_files/lib/Image/ExifTool/PDF.pm)) { throw "Missing ExifTool PDF module" }
-          & ./publish/tools/win/exiftool.exe -ver
-          if ($LASTEXITCODE -ne 0) { throw "ExifTool startup failed" }
-          & ./publish/tools/win/exiftool.exe -listw > $null
-          if ($LASTEXITCODE -ne 0) { throw "ExifTool modules failed to load" }
-
       - name: Build MSI
         shell: pwsh
         run: |
@@ -64,7 +55,7 @@ jobs:
         shell: pwsh
         run: |
           Expand-Archive MetadataDel-win-x64.zip -DestinationPath zip-check
-          foreach ($file in @('MetadataDel.exe', 'app.ico', 'tools/win/exiftool.exe', 'tools/win/exiftool_files/lib/Image/ExifTool/PDF.pm')) {
+          foreach ($file in @('MetadataDel.exe', 'app.ico')) {
             if (-not (Test-Path (Join-Path zip-check $file))) { throw "Missing distribution file: $file" }
           }
 

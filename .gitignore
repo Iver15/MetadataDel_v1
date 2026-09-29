@@ -35,7 +35,6 @@ installer/msi/PublishFiles.wxs
 installer/MetadataDel-Setup-*.exe
 installer/*.msi
 *.zip
-!MetadataDel.Cli/tools/win/exiftool_files/Licenses_Strawberry_Perl.zip
 *.7z
 *.tar
 *.tar.gz
@@ -55,11 +54,6 @@ Thumbs.db
 node_modules/
 Landing/node_modules/
 
-# Exiftool large sources (keep only what we ship)
-/Exiftool/
-!MetadataDel.Cli/tools/
-!publish/tools/
-!publish-mac/tools/
 
 # Build configuration variants
 [Dd]ebug/

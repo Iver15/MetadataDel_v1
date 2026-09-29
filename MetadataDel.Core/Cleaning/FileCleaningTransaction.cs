@@ -33,7 +33,25 @@ internal sealed class FileCleaningTransaction : IDisposable
         ct.ThrowIfCancellationRequested();
         // Respect existing readers/locks before replacing the directory entry.
         using (new FileStream(_path, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
-        File.Move(WorkingPath, _path, overwrite: true);
+        Publish(WorkingPath, _path, _path);
+    }
+
+    /// <summary>
+    /// Moves a finished temporary file onto <paramref name="destination"/> without widening access:
+    /// Windows keeps the replaced file's ACL via ReplaceFile, Unix copies the source file mode.
+    /// </summary>
+    internal static void Publish(string temporaryPath, string destination, string permissionSource)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            if (File.Exists(destination))
+                File.Replace(temporaryPath, destination, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            else
+                File.Move(temporaryPath, destination);
+            return;
+        }
+        File.SetUnixFileMode(temporaryPath, File.GetUnixFileMode(permissionSource));
+        File.Move(temporaryPath, destination, overwrite: true);
     }
 
     public void Dispose()
