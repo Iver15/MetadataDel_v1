@@ -5,7 +5,7 @@
     <AssemblyName>MetadataDel</AssemblyName>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>2.2.1</Version>
+    <Version>2.3.0</Version>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <Description>Консольная сборка MetadataDel для удаления метаданных из PDF, Word и Excel-файлов на macOS.</Description>
     <PublishSingleFile>true</PublishSingleFile>

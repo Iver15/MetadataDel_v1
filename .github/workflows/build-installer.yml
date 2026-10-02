@@ -65,6 +65,13 @@ jobs:
           name: MetadataDel-Setup
           path: installer/MetadataDel-Setup-*.exe
 
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MetadataDel-MSI
+          path: installer/msi/MetadataDel-*.msi
+          if-no-files-found: error
+
       - name: Upload ZIP artifact
         uses: actions/upload-artifact@v4
         with:
@@ -78,4 +85,8 @@ jobs:
           files: |
             installer/MetadataDel-Setup-*.exe
             MetadataDel-win-x64.zip
+            installer/msi/MetadataDel-*.msi
+            publish/MetadataDel.exe
+          draft: true
+          fail_on_unmatched_files: true
           generate_release_notes: true

@@ -252,7 +252,7 @@ bash scripts/mac/build-dmg.sh
 
 ```powershell
 dotnet tool install --global wix --version 5.0.2
-pwsh installer/msi/build-msi.ps1 -Version 2.2.1
+pwsh installer/msi/build-msi.ps1 -Version 2.3.0
 ```
 
 MSI ставит приложение в `Program Files` и регистрирует контекстное меню в HKLM. Этот вариант рассчитан на GPO/корпоративное развёртывание.

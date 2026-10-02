@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 APP_NAME="MetadataDel Installer"
 PRODUCT_NAME="MetadataDel"
-VERSION="${METADATADEL_VERSION:-2.2.1}"
+VERSION="${METADATADEL_VERSION:-2.3.0}"
 RID="${METADATADEL_RID:-}"
 DIST_DIR="$ROOT_DIR/dist/mac"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
@@ -88,7 +88,7 @@ chmod +x "$RESOURCES_DIR/scripts/mac/"*.sh
 python3 scripts/mac/installer/render_icon.py "$DIST_DIR/AppIcon.iconset"
 iconutil -c icns "$DIST_DIR/AppIcon.iconset" -o "$RESOURCES_DIR/AppIcon.icns"
 
-sed "s#<string>2.2.1</string>#<string>$VERSION</string>#g" \
+sed "s#<string>2.3.0</string>#<string>$VERSION</string>#g" \
   scripts/mac/installer/Info.plist > "$APP_DIR/Contents/Info.plist"
 
 clang -arch "$APP_ARCH" -fobjc-arc scripts/mac/installer/MetadataDelInstaller.m \

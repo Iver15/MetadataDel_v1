@@ -58,8 +58,8 @@ bash scripts/mac/build-dmg.sh
 - Проверить артефакт:
 
 ```bash
-hdiutil imageinfo dist/mac/MetadataDel-2.2.1-osx-arm64.dmg
-hdiutil attach dist/mac/MetadataDel-2.2.1-osx-arm64.dmg -nobrowse -readonly
+hdiutil imageinfo dist/mac/MetadataDel-2.3.0-osx-arm64.dmg
+hdiutil attach dist/mac/MetadataDel-2.3.0-osx-arm64.dmg -nobrowse -readonly
 ```
 
 - Проверить, что в DMG есть:
@@ -104,7 +104,7 @@ bash scripts/mac/build-dmg.sh
 
 ## GitHub Release
 
-- Создать тег формата `v<version>`, например `v2.2.1`.
+- Создать тег формата `v<version>`, например `v2.3.0`.
 - Дождаться workflow `Build Windows Installer`.
 - Проверить артефакты релиза:
   - `MetadataDel-Setup-<version>.exe`;

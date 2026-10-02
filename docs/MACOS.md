@@ -142,18 +142,18 @@ bash scripts/mac/build-dmg.sh
 
 ```bash
 bash scripts/mac/build-dmg.sh
-hdiutil imageinfo dist/mac/MetadataDel-2.2.1-osx-arm64.dmg
+hdiutil imageinfo dist/mac/MetadataDel-2.3.0-osx-arm64.dmg
 codesign --verify --deep --strict --verbose=2 "dist/mac/MetadataDel Installer.app"
 "dist/mac/MetadataDel Installer.app/Contents/Resources/bin/metadatadel" --help
-GetFileInfo dist/mac/MetadataDel-2.2.1-osx-arm64.dmg
-xattr -l dist/mac/MetadataDel-2.2.1-osx-arm64.dmg
+GetFileInfo dist/mac/MetadataDel-2.3.0-osx-arm64.dmg
+xattr -l dist/mac/MetadataDel-2.3.0-osx-arm64.dmg
 ```
 
 Проверка содержимого DMG:
 
 ```bash
 mount_dir="$(mktemp -d)"
-hdiutil attach dist/mac/MetadataDel-2.2.1-osx-arm64.dmg -mountpoint "$mount_dir" -nobrowse -readonly
+hdiutil attach dist/mac/MetadataDel-2.3.0-osx-arm64.dmg -mountpoint "$mount_dir" -nobrowse -readonly
 find "$mount_dir" -maxdepth 2 -print
 hdiutil detach "$mount_dir"
 ```
@@ -161,7 +161,7 @@ hdiutil detach "$mount_dir"
 Для неподписанной сборки команда ниже ожидаемо покажет `rejected`:
 
 ```bash
-spctl -a -vvv -t install dist/mac/MetadataDel-2.2.1-osx-arm64.dmg
+spctl -a -vvv -t install dist/mac/MetadataDel-2.3.0-osx-arm64.dmg
 ```
 
 Это нормально для внутренней ad-hoc сборки. Для публичного релиза результат должен быть успешным после Developer ID signing и notarization.
