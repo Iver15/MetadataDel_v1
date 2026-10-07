@@ -20,3 +20,12 @@ jobs:
       - run: dotnet test MetadataDel.Core.Tests/MetadataDel.Core.Tests.csproj -c Release --no-build
       - if: runner.os == 'macOS'
         run: python3 scripts/tests/smoke.py
+      - if: runner.os == 'macOS'
+        name: Native desktop contracts
+        run: |
+          clang -fobjc-arc -framework Cocoa -I scripts/mac/app scripts/tests/mac-runner-tests.m scripts/mac/app/CleaningRunner.m -o /tmp/runner-tests
+          /tmp/runner-tests
+          clang -fobjc-arc -framework Foundation -I scripts/mac/app scripts/tests/mac-integration-state-tests.m scripts/mac/app/IntegrationManager.m -o /tmp/state-tests
+          /tmp/state-tests
+          bash scripts/tests/mac-ownership-tests.sh
+          bash scripts/tests/mac-integration-tests.sh

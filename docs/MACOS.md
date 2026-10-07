@@ -1,167 +1,80 @@
 # MetadataDel для macOS
 
-Документ описывает установку, удаление и сборку macOS-дистрибутива MetadataDel.
+## Установка и основной сценарий
 
-## Что получает пользователь
+1. Выберите DMG для Apple Silicon (`osx-arm64`) или Intel (`osx-x64`).
+2. Откройте DMG и перетащите **MetadataDel.app** в **Программы**. Если нет прав на общую папку, используйте `~/Applications`.
+3. Запустите приложение из этой папки и нажмите **Включить очистку правым кликом в Finder**.
+4. В Finder: правый клик по документу или папке → **Быстрые действия** → **Удалить метаданные (MetadataDel)**.
 
-macOS-дистрибутив поставляется как DMG:
+Действие Finder работает при закрытом окне приложения и после извлечения DMG. .NET и Microsoft Office отдельно устанавливать не нужно. Интеграция работает в профиле пользователя, без `sudo`.
 
-```text
-MetadataDel-<version>-osx-arm64.dmg
-```
+При включении интеграции устанавливаются:
 
-Внутри DMG находится приложение:
+- `~/.local/bin/metadatadel` и ссылка `mdel`;
+- `~/Library/Services/Удалить метаданные (MetadataDel).workflow`;
+- обёртка, путь команды и версия интеграции в `~/Library/Application Support/MetadataDel/`.
 
-```text
-MetadataDel Installer.app
-```
+Для доступа к CLI из терминала `~/.local/bin` должен быть в `PATH`. Главное окно и Finder от `PATH` терминала не зависят.
 
-Установщик не требует `sudo` и работает только в профиле текущего пользователя.
+## Дополнительное окно обработки
 
-## Установка
+Откройте MetadataDel по значку, перетащите один или несколько файлов в выделенную область либо нажмите **Выбрать файлы…** (`⌘O`). Нажмите **Очистить**. Поддерживаются PDF, DOCX, XLSX, DOC и XLS; папки обрабатываются через Finder/CLI.
 
-1. Откройте `MetadataDel-<version>-osx-arm64.dmg`.
-2. Запустите **MetadataDel Installer.app**.
-3. Нажмите **Установить или обновить**.
-4. Откройте Finder.
-5. Нажмите правой кнопкой на файл или папку.
-6. Выберите **Быстрые действия** -> **Удалить метаданные (MetadataDel)**.
+У каждого файла отображается результат. Предупреждение не равнозначно ошибке: выбирайте строку, чтобы прочитать подробности. **Показать в Finder** показывает фактический результат, в том числе отдельную очищенную копию PDF, если оригинал нельзя заменить.
 
-После установки появляются:
+Резервные копии в окне по умолчанию включены. Настройка относится только к этому окну. Finder сохраняет своё прежнее поведение: резервные копии включены всегда. Повторные копии `.2.bak`, `.3.bak` не перезаписывают исходную `.bak`.
 
-```text
-~/.local/bin/metadatadel
-~/.local/bin/mdel
-~/Library/Services/Удалить метаданные (MetadataDel).workflow
-~/Library/Application Support/MetadataDel/finder-action.sh
-```
+Файлы сначала добавляются в очередь; перетаскивание само по себе не запускает очистку. Повторный запуск готовой строки требует убрать её и добавить файл заново. Штатное закрытие окна во время обработки откладывается до завершения пакета.
 
-Команда `metadatadel` доступна для ручного запуска из терминала, если `~/.local/bin` добавлен в `PATH`.
+## Обновление
+
+Закройте приложение, замените его новой копией в «Программах» и запустите. Если интеграция Finder уже была включена, приложение обновляет её. При ошибке текст в окне предлагает проверить причину; можно повторить через **Настройки → Восстановить Finder**.
+
+Установка сначала проверяет новую команду, затем заменяет управляемые компоненты. При ошибке установки workflow возвращается предыдущая версия. Обновление не требует заново включать правый клик. Из приложения, открытого прямо на DMG, интеграция не устанавливается: сначала скопируйте приложение в постоянную папку.
 
 ## Удаление
 
-1. Запустите **MetadataDel Installer.app**.
-2. Нажмите **Удалить**.
+Откройте **Настройки → Удалить интеграцию**. Удаляются CLI-команды, действие Finder, служебная конфигурация и журналы MetadataDel с путями файлов. Затем закройте приложение и переместите **MetadataDel.app** в Корзину.
 
-Удаляются:
+Документы и их резервные копии остаются на месте. Перемещение только приложения в Корзину не удаляет отдельно установленную интеграцию Finder.
 
-```text
-~/.local/bin/metadatadel
-~/.local/bin/mdel
-~/Library/Services/Удалить метаданные (MetadataDel).workflow
-~/Library/Application Support/MetadataDel/finder-action.sh
-```
+## Сборка и проверка
 
-Журналы обработки остаются здесь:
-
-```text
-~/Library/Logs/MetadataDel/
-```
-
-Журналы не удаляются автоматически, чтобы пользователь мог посмотреть причины ошибок после очистки.
-
-## Запуск без Apple Developer ID
-
-Если DMG собран без Developer ID и notarization, приложение можно передавать коллегам, но macOS может показать предупреждение Gatekeeper.
-
-Обычный способ запуска:
-
-1. Откройте DMG.
-2. Нажмите правой кнопкой на **MetadataDel Installer.app**.
-3. Выберите **Открыть**.
-4. Подтвердите запуск в системном диалоге.
-
-Если macOS всё равно блокирует запуск, откройте:
-
-```text
-System Settings -> Privacy & Security
-```
-
-и разрешите запуск заблокированного приложения.
-
-Крайний вариант для внутреннего тестирования:
+Требуются .NET 8 SDK, Python 3 и Command Line Tools. При нескольких установках Xcode можно выбрать уже настроенный CLT только для команды:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/MetadataDel Installer.app"
-```
-
-Эту команду не нужно включать в публичную инструкцию для обычных пользователей. Для публичного релиза нужен Developer ID и notarization.
-
-## Сборка DMG
-
-Для сборки нужен .NET 8 SDK и стандартные инструменты macOS Command Line Tools.
-
-Apple Silicon:
-
-```bash
+DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+DOTNET=/path/to/dotnet PYTHON=/path/to/python3 \
 bash scripts/mac/build-dmg.sh
-```
 
-Артефакт появится здесь:
-
-```text
-dist/mac/MetadataDel-<version>-osx-arm64.dmg
-```
-
-Для Intel Mac:
-
-```bash
 METADATADEL_RID=osx-x64 bash scripts/mac/build-dmg.sh
 ```
 
-## Подписанная и нотарифицированная сборка
-
-Для публичного релиза используйте Developer ID Application certificate и профиль `notarytool`.
-
-Пример:
+Результат: `dist/mac/MetadataDel-2.4.0-<rid>.dmg`. Внутри — `MetadataDel.app`, а не прежний отдельный установщик.
 
 ```bash
-SIGN_IDENTITY="Developer ID Application: Example Developer (ABCDE12345)" \
-NOTARY_PROFILE="metadata-del-notary" \
-WAIT_FOR_NOTARIZATION=1 \
+dotnet build MetaDataDel.sln -c Release
+dotnet test MetadataDel.Core.Tests -c Release
+python3 scripts/tests/smoke.py /path/to/dotnet
+bash scripts/tests/mac-integration-tests.sh
+clang -fobjc-arc -framework Cocoa -I scripts/mac/app \
+  scripts/tests/mac-runner-tests.m scripts/mac/app/CleaningRunner.m -o /tmp/mdel-runner-tests
+/tmp/mdel-runner-tests
+codesign --verify --deep --strict dist/mac/MetadataDel.app
+hdiutil verify dist/mac/MetadataDel-2.4.0-osx-arm64.dmg
+```
+
+## Подпись для распространения
+
+По умолчанию локальная сборка подписывается ad-hoc. Она подходит для разработки и не подтверждает прохождение Gatekeeper у получателя. Для публичного выпуска нужны Developer ID, hardened runtime, notarization и проверка скачанного дистрибутива на чистом профиле.
+
+```bash
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+NOTARY_PROFILE="metadata-del-notary" WAIT_FOR_NOTARIZATION=1 \
 bash scripts/mac/build-dmg.sh
 ```
 
-Скрипт выполнит:
+Сначала подписывается вложенный .NET apphost с разрешением JIT, затем приложение и DMG. Сборка отправляется в Apple, ожидает результат, получает stapled ticket и проходит проверки. Не отключайте Gatekeeper и не снимайте quarantine для маскировки проблем публичного релиза.
 
-- сборку self-contained CLI;
-- сборку `MetadataDel Installer.app`;
-- генерацию `.icns` из логотипа;
-- подпись `.app`;
-- упаковку DMG;
-- установку фирменной иконки для смонтированного тома DMG;
-- установку фирменной Finder-иконки для локального файла `.dmg`;
-- подпись DMG;
-- отправку на notarization;
-- `stapler staple`;
-- проверку Gatekeeper через `spctl`.
-
-Важно: иконка самого файла `.dmg` хранится в macOS metadata (`com.apple.ResourceFork` и FinderInfo). Она видна локально в Finder и обычно сохраняется при копировании между macOS-дисками, но может потеряться при загрузке на GitHub, в мессенджеры или на файловые сервисы, которые отбрасывают extended attributes. Иконка приложения внутри DMG и иконка смонтированного тома сохраняются надёжно.
-
-## Проверка перед отправкой коллегам
-
-```bash
-bash scripts/mac/build-dmg.sh
-hdiutil imageinfo dist/mac/MetadataDel-2.3.0-osx-arm64.dmg
-codesign --verify --deep --strict --verbose=2 "dist/mac/MetadataDel Installer.app"
-"dist/mac/MetadataDel Installer.app/Contents/Resources/bin/metadatadel" --help
-GetFileInfo dist/mac/MetadataDel-2.3.0-osx-arm64.dmg
-xattr -l dist/mac/MetadataDel-2.3.0-osx-arm64.dmg
-```
-
-Проверка содержимого DMG:
-
-```bash
-mount_dir="$(mktemp -d)"
-hdiutil attach dist/mac/MetadataDel-2.3.0-osx-arm64.dmg -mountpoint "$mount_dir" -nobrowse -readonly
-find "$mount_dir" -maxdepth 2 -print
-hdiutil detach "$mount_dir"
-```
-
-Для неподписанной сборки команда ниже ожидаемо покажет `rejected`:
-
-```bash
-spctl -a -vvv -t install dist/mac/MetadataDel-2.3.0-osx-arm64.dmg
-```
-
-Это нормально для внутренней ad-hoc сборки. Для публичного релиза результат должен быть успешным после Developer ID signing и notarization.
+Фактически выполненные и оставшиеся проверки перечислены в [DESKTOP-ACCEPTANCE.md](DESKTOP-ACCEPTANCE.md).

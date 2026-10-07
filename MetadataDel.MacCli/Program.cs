@@ -17,6 +17,9 @@ public static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.FirstOrDefault() == "--gui-clean")
+            return await GuiCleanCommand.RunAsync(args, Console.Out, Console.Error);
+
         if (HasArg(args, "--help") || HasArg(args, "-h"))
         {
             PrintUsage();

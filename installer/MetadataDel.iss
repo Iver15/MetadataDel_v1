@@ -29,6 +29,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 WizardStyle=modern
+UsePreviousTasks=yes
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=..\MetadataDel.Cli\app.ico
 ChangesAssociations=yes
@@ -54,7 +55,7 @@ Name: "desktopicon"; Description: "Создать ярлык на рабочем
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--install-shell"; Flags: runhidden waituntilterminated skipifdoesntexist; Tasks: ctxmenu; StatusMsg: "Настройка контекстного меню..."
-Filename: "{app}\{#MyAppExeName}"; Description: "Открыть MetadataDel"; Flags: nowait postinstall skipifsilent unchecked shellexec; WorkingDir: "{app}"
+Filename: "{app}\{#MyAppExeName}"; Description: "Открыть MetadataDel"; Flags: nowait postinstall skipifsilent shellexec; WorkingDir: "{app}"
 
 [UninstallRun]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall-shell"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "MetadataDelUninstallShell"; StatusMsg: "Удаление контекстного меню..."

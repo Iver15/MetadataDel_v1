@@ -5,17 +5,17 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>ru</string>
   <key>CFBundleExecutable</key>
-  <string>MetadataDel Installer</string>
+  <string>MetadataDel</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
-  <string>ru.metadatadel.installer</string>
+  <string>ru.metadatadel.app</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>MetadataDel Installer</string>
+  <string>MetadataDel</string>
   <key>CFBundleDisplayName</key>
-  <string>MetadataDel Installer</string>
+  <string>MetadataDel</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -24,6 +24,8 @@
   <string>2.3.0</string>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
+  <key>CFBundleDocumentTypes</key>
+  <array><dict><key>CFBundleTypeName</key><string>Документы</string><key>CFBundleTypeRole</key><string>Editor</string><key>LSHandlerRank</key><string>Alternate</string><key>CFBundleTypeExtensions</key><array><string>pdf</string><string>docx</string><string>xlsx</string><string>doc</string><string>xls</string></array></dict></array>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSHumanReadableCopyright</key>

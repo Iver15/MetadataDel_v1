@@ -19,7 +19,7 @@ public static class Program
     [STAThread]
     public static async Task<int> Main(string[] args)
     {
-        if (OperatingSystem.IsWindows() && args.Length == 0)
+        if (OperatingSystem.IsWindows() && DesktopEntryPoint.ShouldOpenMainWindow(args))
         {
             return SetupLauncher.Run();
         }

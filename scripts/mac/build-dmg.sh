@@ -4,9 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")"/../.. && pwd)"
 cd "$ROOT_DIR"
 
-APP_NAME="MetadataDel Installer"
+APP_NAME="MetadataDel"
 PRODUCT_NAME="MetadataDel"
-VERSION="${METADATADEL_VERSION:-2.3.0}"
+VERSION="${METADATADEL_VERSION:-2.4.0}"
 RID="${METADATADEL_RID:-}"
 DIST_DIR="$ROOT_DIR/dist/mac"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
@@ -80,18 +80,21 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$RESOURCES_DIR/bin" "$RESOURCES_DIR/scripts/
 
 cp "$PUBLISH_DIR/MetadataDel" "$RESOURCES_DIR/bin/metadatadel"
 chmod +x "$RESOURCES_DIR/bin/metadatadel"
+cp scripts/mac/integration-safety.sh "$RESOURCES_DIR/scripts/mac/integration-safety.sh"
+cp scripts/mac/install-app-integration.sh "$RESOURCES_DIR/scripts/mac/install-app-integration.sh"
+cp scripts/mac/uninstall.sh "$RESOURCES_DIR/scripts/mac/uninstall.sh"
 cp scripts/mac/finder-action.sh "$RESOURCES_DIR/scripts/mac/finder-action.sh"
 cp scripts/mac/install-finder-action.sh "$RESOURCES_DIR/scripts/mac/install-finder-action.sh"
 cp scripts/mac/uninstall-finder-action.sh "$RESOURCES_DIR/scripts/mac/uninstall-finder-action.sh"
 chmod +x "$RESOURCES_DIR/scripts/mac/"*.sh
 
-python3 scripts/mac/installer/render_icon.py "$DIST_DIR/AppIcon.iconset"
+"${PYTHON:-python3}" scripts/mac/installer/render_icon.py "$DIST_DIR/AppIcon.iconset"
 iconutil -c icns "$DIST_DIR/AppIcon.iconset" -o "$RESOURCES_DIR/AppIcon.icns"
 
 sed "s#<string>2.3.0</string>#<string>$VERSION</string>#g" \
   scripts/mac/installer/Info.plist > "$APP_DIR/Contents/Info.plist"
 
-clang -arch "$APP_ARCH" -fobjc-arc scripts/mac/installer/MetadataDelInstaller.m \
+clang -arch "$APP_ARCH" -mmacosx-version-min=12.0 -fobjc-arc scripts/mac/app/*.m \
   -framework Cocoa \
   -o "$APP_DIR/Contents/MacOS/$APP_NAME"
 clang -fobjc-arc scripts/mac/installer/set_file_icon.m \
@@ -102,7 +105,8 @@ chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
 if [ -n "$SIGN_IDENTITY" ]; then
   echo "[INFO] Подпись приложения: $SIGN_IDENTITY"
-  codesign --force --deep --strict --options runtime --sign "$SIGN_IDENTITY" "$APP_DIR"
+  codesign --force --options runtime --timestamp --entitlements scripts/mac/app/dotnet.entitlements --sign "$SIGN_IDENTITY" "$RESOURCES_DIR/bin/metadatadel"
+  codesign --force --strict --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_DIR"
 else
   echo "[INFO] Подпись приложения ad-hoc"
   codesign --force --deep --sign - "$APP_DIR"

@@ -48,6 +48,12 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           installer\MetadataDel.iss
 
+      - name: Verify installation in disposable runner profile
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem installer/MetadataDel-Setup-*.exe | Select-Object -First 1).FullName
+          ./scripts/tests/windows-install-smoke.ps1 -Installer $installer -AllowInstallInCurrentProfile
+
       - name: Create ZIP distribution
         run: Compress-Archive -Path publish\* -DestinationPath MetadataDel-win-x64.zip
 

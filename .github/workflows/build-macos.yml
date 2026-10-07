@@ -1,0 +1,42 @@
+name: Build macOS application
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        rid: [osx-arm64, osx-x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet test MetadataDel.Core.Tests -c Release
+      - name: Native runner and integration tests
+        run: |
+          clang -fobjc-arc -framework Cocoa -I scripts/mac/app scripts/tests/mac-runner-tests.m scripts/mac/app/CleaningRunner.m -o /tmp/runner-tests
+          /tmp/runner-tests
+          clang -fobjc-arc -framework Foundation -I scripts/mac/app scripts/tests/mac-integration-state-tests.m scripts/mac/app/IntegrationManager.m -o /tmp/state-tests
+          /tmp/state-tests
+          bash scripts/tests/mac-ownership-tests.sh
+          bash scripts/tests/mac-integration-tests.sh
+      - name: Build app and DMG
+        env:
+          METADATADEL_RID: ${{ matrix.rid }}
+        run: bash scripts/mac/build-dmg.sh
+      - name: Verify distribution
+        run: |
+          codesign --verify --deep --strict dist/mac/MetadataDel.app
+          hdiutil verify dist/mac/MetadataDel-*.dmg
+          plutil -lint dist/mac/MetadataDel.app/Contents/Info.plist
+          test -x dist/mac/MetadataDel.app/Contents/Resources/bin/metadatadel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MetadataDel-${{ matrix.rid }}-unsigned
+          path: dist/mac/MetadataDel-*.dmg
+          if-no-files-found: error

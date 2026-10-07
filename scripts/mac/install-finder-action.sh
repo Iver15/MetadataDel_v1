@@ -3,6 +3,9 @@ set -euo pipefail
 
 # Устанавливает Finder Quick Action "Удалить метаданные (MetadataDel)".
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/integration-safety.sh"
+mdel_check_finder_paths
+
 ROOT_DIR="$(cd "$(dirname "$0")"/../.. && pwd)"
 SUPPORT_DIR="$HOME/Library/Application Support/MetadataDel"
 SERVICES_DIR="$HOME/Library/Services"

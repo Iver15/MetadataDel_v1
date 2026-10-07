@@ -1,6 +1,6 @@
 param(
     [string]$PublishDir = (Join-Path $PSScriptRoot '..\..\publish'),
-    [string]$Version = '2.3.0'
+    [string]$Version = '2.4.0'
 )
 $ErrorActionPreference = 'Stop'
 

@@ -23,8 +23,19 @@
       <ComponentRef Id="CtxMenuWordRegistry" />
       <ComponentRef Id="CtxMenuExcelRegistry" />
       <ComponentRef Id="UserLogsCleanup" />
+      <ComponentRef Id="StartMenuShortcut" />
     </Feature>
   </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramMenuFolder"><Directory Id="MetadataDelMenu" Name="MetadataDel" /></StandardDirectory>
+    <Component Id="StartMenuShortcut" Directory="MetadataDelMenu" Guid="*">
+      <Shortcut Id="MetadataDelShortcut" Name="MetadataDel" Target="[INSTALLFOLDER]MetadataDel.exe" WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder Id="RemoveMetadataDelMenu" On="uninstall" />
+      <!-- Non-advertised shortcuts require a per-user registry KeyPath (ICE43). -->
+      <RegistryValue Root="HKCU" Key="SOFTWARE\MetadataDel" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+  </Fragment>
 
   <!-- Журналы содержат пути очищенных файлов; удаляются из профиля пользователя, который удаляет программу. -->
   <Fragment>

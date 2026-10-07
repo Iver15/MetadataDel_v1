@@ -58,14 +58,14 @@ bash scripts/mac/build-dmg.sh
 - Проверить артефакт:
 
 ```bash
-hdiutil imageinfo dist/mac/MetadataDel-2.3.0-osx-arm64.dmg
-hdiutil attach dist/mac/MetadataDel-2.3.0-osx-arm64.dmg -nobrowse -readonly
+hdiutil imageinfo dist/mac/MetadataDel-2.4.0-osx-arm64.dmg
+hdiutil attach dist/mac/MetadataDel-2.4.0-osx-arm64.dmg -nobrowse -readonly
 ```
 
 - Проверить, что в DMG есть:
 
 ```text
-MetadataDel Installer.app
+MetadataDel.app
 Applications -> /Applications
 ```
 
@@ -86,11 +86,11 @@ bash scripts/mac/build-dmg.sh
 Важно: в документации нельзя публиковать реальные имена Developer ID, Team ID, Apple ID, keychain profile с персональными данными или app-specific password.
 
 - Проверить пользовательский сценарий:
-  - открыть `MetadataDel Installer.app`;
-  - нажать **Установить или обновить**;
+  - открыть `MetadataDel.app`;
+  - скопировать приложение в «Программы» и включить очистку правым кликом;
   - убедиться, что появились `~/.local/bin/metadatadel`, `~/.local/bin/mdel` и Finder Quick Action;
   - обработать тестовый PDF/DOCX/XLSX через Finder;
-  - нажать **Удалить** и проверить удаление интеграции.
+  - выбрать **Настройки → Удалить интеграцию** и проверить удаление интеграции.
 
 ## Проверка пользовательских сценариев
 
@@ -141,3 +141,12 @@ git commit -m "Initial public release"
 ```
 
 После этого проверьте `git status`, `git ls-files` и поиск по приватным маркерам уже в новом каталоге, затем привяжите новый GitHub remote.
+
+## Проверка desktop-версии 2.4
+
+- Пройти матрицу [DESKTOP-ACCEPTANCE.md](DESKTOP-ACCEPTANCE.md); сборка сама по себе не подтверждает установку на чистой ОС.
+- Правый клик проверить при закрытом GUI, после обновления с 2.3.0 и после извлечения DMG.
+- Windows Inno: `scripts/tests/windows-install-smoke.ps1` запускается только в одноразовом профиле с явным `-AllowInstallInCurrentProfile`.
+- MSI остаётся per-machine; проверять отдельно от пользовательского Inno/portable.
+- GitHub workflow `Build macOS application` создаёт ad-hoc артефакты arm64/x64. Их нельзя обозначать нотарифицированными: публичную подпись и notarization выполнить отдельно с доступными сертификатами.
+- Подписать Windows EXE, Setup/uninstaller и MSI доступным сертификатом до публичного выпуска. SmartScreen проверяется отдельно; валидная подпись не гарантирует отсутствия предупреждения.

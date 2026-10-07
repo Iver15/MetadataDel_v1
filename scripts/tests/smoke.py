@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Smoke-test the built CLI and Finder wrapper without touching the user's documents or installation."""
+import json
 import pathlib
 import subprocess
 import sys
@@ -31,6 +32,12 @@ with tempfile.TemporaryDirectory(prefix="metadatadel-smoke-") as folder:
     assert broken.read_bytes() == b"broken document"
     assert (work / "broken.docx.MetadataDel-ошибка.txt").is_file()
     assert run_cli("--help").returncode == 0
+    result = run_cli("--gui-clean", "--backup=on", "--", str(broken))
+    payload = json.loads(result.stdout)
+    assert result.returncode == 2 and not payload["success"] and payload["outputPath"] is None
+    assert broken.read_bytes() == b"broken document"
+    result = run_cli("--gui-clean", "--unknown", "--", str(broken))
+    assert result.returncode == 2 and not json.loads(result.stdout)["success"]
     print("CLI: audit/invalid options/relative error report/original preservation/help PASS")
 
     script = (root / "scripts/mac/finder-action.sh").read_text()
@@ -47,3 +54,12 @@ with tempfile.TemporaryDirectory(prefix="metadatadel-smoke-") as folder:
         result = subprocess.run(["bash", str(wrapper), str(broken)], capture_output=True)
         assert result.returncode == status, (status, result)
     print("Finder: CLI exit codes 0/1/2 PASS")
+
+    captured = work / "finder-args.json"
+    stub.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > " + str(captured) + "\n")
+    # Arguments are data: punctuation and spaces must remain a single file argument.
+    special = str(work / "-Договор 'пример'.pdf")
+    result = subprocess.run(["bash", str(wrapper), special], capture_output=True)
+    assert result.returncode == 0, result
+    assert captured.read_text().splitlines() == ["--log", "--backup=on", special]
+    print("Finder: backup and literal argument preservation PASS")
