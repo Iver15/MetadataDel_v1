@@ -95,7 +95,7 @@ sed "s#<string>2.3.0</string>#<string>$VERSION</string>#g" \
   scripts/mac/installer/Info.plist > "$APP_DIR/Contents/Info.plist"
 
 clang -arch "$APP_ARCH" -mmacosx-version-min=12.0 -fobjc-arc scripts/mac/app/*.m \
-  -framework Cocoa \
+  -framework Cocoa -framework UniformTypeIdentifiers \
   -o "$APP_DIR/Contents/MacOS/$APP_NAME"
 clang -fobjc-arc scripts/mac/installer/set_file_icon.m \
   -framework Cocoa \

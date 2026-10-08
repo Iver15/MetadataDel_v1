@@ -4,16 +4,24 @@
 @end
 @implementation FileDropView
 - (instancetype)initWithFrame:(NSRect)frame {
-    if ((self=[super initWithFrame:frame])) { _enabled=YES; [self registerForDraggedTypes:@[NSPasteboardTypeFileURL]]; }
+    if ((self=[super initWithFrame:frame])) {
+        _enabled=YES; [self registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+        self.accessibilityRole=NSAccessibilityGroupRole;
+        self.accessibilityLabel=@"Добавление документов";
+        self.accessibilityHelp=@"Перетащите файлы в эту область или используйте кнопку «Выбрать файлы».";
+    }
     return self;
 }
 - (void)drawRect:(NSRect)dirtyRect {
     [super drawRect:dirtyRect];
-    NSBezierPath *shape=[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,1,1) xRadius:14 yRadius:14];
-    [[NSColor.controlBackgroundColor colorWithAlphaComponent:0.7] setFill]; [shape fill];
+    if (self.plainSurface) return;
+    NSBezierPath *shape=[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,1,1) xRadius:18 yRadius:18];
+    [NSColor.controlBackgroundColor setFill]; [shape fill];
+    if (self.highlighted) { [[NSColor.controlAccentColor colorWithAlphaComponent:0.08] setFill]; [shape fill]; }
     [(self.highlighted ? NSColor.controlAccentColor : NSColor.separatorColor) setStroke];
     CGFloat dash[]={5,4}; [shape setLineDash:dash count:2 phase:0]; shape.lineWidth=self.highlighted ? 2 : 1; [shape stroke];
 }
+- (void)setEnabled:(BOOL)enabled { _enabled=enabled; if (!enabled) self.highlighted=NO; self.needsDisplay=YES; }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
     self.highlighted=self.enabled && [sender.draggingPasteboard canReadObjectForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey:@YES}];
     self.needsDisplay=YES; return self.highlighted ? NSDragOperationCopy : NSDragOperationNone;
