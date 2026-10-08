@@ -58,8 +58,8 @@ bash scripts/mac/build-dmg.sh
 - Проверить артефакт:
 
 ```bash
-hdiutil imageinfo dist/mac/MetadataDel-2.4.0-osx-arm64.dmg
-hdiutil attach dist/mac/MetadataDel-2.4.0-osx-arm64.dmg -nobrowse -readonly
+hdiutil imageinfo dist/mac/MetadataDel-2.4.1-osx-arm64.dmg
+hdiutil attach dist/mac/MetadataDel-2.4.1-osx-arm64.dmg -nobrowse -readonly
 ```
 
 - Проверить, что в DMG есть:

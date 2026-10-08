@@ -51,7 +51,7 @@ bash scripts/mac/build-dmg.sh
 METADATADEL_RID=osx-x64 bash scripts/mac/build-dmg.sh
 ```
 
-Результат: `dist/mac/MetadataDel-2.4.0-<rid>.dmg`. Внутри — `MetadataDel.app`, а не прежний отдельный установщик.
+Результат: `dist/mac/MetadataDel-2.4.1-<rid>.dmg`. Внутри — `MetadataDel.app`, а не прежний отдельный установщик.
 
 ```bash
 dotnet build MetaDataDel.sln -c Release
@@ -62,7 +62,7 @@ clang -fobjc-arc -framework Cocoa -I scripts/mac/app \
   scripts/tests/mac-runner-tests.m scripts/mac/app/CleaningRunner.m -o /tmp/mdel-runner-tests
 /tmp/mdel-runner-tests
 codesign --verify --deep --strict dist/mac/MetadataDel.app
-hdiutil verify dist/mac/MetadataDel-2.4.0-osx-arm64.dmg
+hdiutil verify dist/mac/MetadataDel-2.4.1-osx-arm64.dmg
 ```
 
 ## Подпись для распространения
