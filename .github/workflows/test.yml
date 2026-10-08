@@ -27,7 +27,7 @@ jobs:
           /tmp/runner-tests
           clang -fobjc-arc -framework Foundation -I scripts/mac/app scripts/tests/mac-integration-state-tests.m scripts/mac/app/IntegrationManager.m -o /tmp/state-tests
           /tmp/state-tests
-          clang -fobjc-arc -framework Cocoa -framework UniformTypeIdentifiers -I scripts/mac/app scripts/tests/mac-ui-state-tests.m scripts/mac/app/CleaningRunner.m scripts/mac/app/FileDropView.m scripts/mac/app/IntegrationManager.m -o /tmp/ui-state-tests
+          clang -fobjc-arc -framework Cocoa -framework UniformTypeIdentifiers -I scripts/mac/app scripts/tests/mac-ui-state-tests.m scripts/mac/app/CleaningRunner.m scripts/mac/app/FileDropView.m scripts/mac/app/IntegrationManager.m scripts/mac/app/SettingsWindow.m -o /tmp/ui-state-tests
           /tmp/ui-state-tests
           bash scripts/tests/mac-ownership-tests.sh
           bash scripts/tests/mac-integration-tests.sh

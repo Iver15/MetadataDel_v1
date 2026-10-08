@@ -3,6 +3,7 @@
 #import "FileDropView.h"
 #import "CleaningRunner.h"
 #import "IntegrationManager.h"
+#import "SettingsWindow.h"
 
 @interface StatusCellView : NSTableCellView
 @property NSColor *statusColor;
@@ -28,7 +29,8 @@
 @property NSScrollView *fileScroll, *detailScroll;
 @property NSStackView *queueHeader, *actions, *dropContents;
 @property NSTextField *formats;
-@property NSImageView *dropIcon;
+@property NSImageView *dropIcon, *integrationIcon;
+@property SettingsWindow *settingsWindow;
 @property NSLayoutConstraint *compactDropHeight;
 @property NSProgressIndicator *progress;
 @property FileDropView *drop;
@@ -38,6 +40,7 @@
 @property NSUInteger completed, successes, warnings;
 @end
 @implementation AppDelegate
++ (void)initialize { [NSUserDefaults.standardUserDefaults registerDefaults:@{MDBackupDefaultsKey:@YES}]; }
 - (NSTextField *)label:(NSString *)text size:(CGFloat)size weight:(NSFontWeight)weight {
     NSTextField *label=[NSTextField wrappingLabelWithString:text]; label.font=[NSFont systemFontOfSize:size weight:weight];
     label.textColor=NSColor.labelColor; return label;
@@ -58,23 +61,46 @@
     [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
     if (self.initialFiles) [self addURLs:[self.initialFiles valueForKey:@"stringByStandardizingPath"]];
     [self refresh];
-    NSString *path=NSBundle.mainBundle.bundlePath;
-    if ([IntegrationManager needsUpdate] && ([path hasPrefix:@"/Applications/"] || [path hasPrefix:[NSHomeDirectory() stringByAppendingString:@"/Applications/"]])) [self installIntegration:nil];
+    if ([IntegrationManager needsUpdate] && [IntegrationManager isInApplications]) [self installIntegration:nil];
+}
+- (NSMenuItem *)item:(NSMenu *)menu title:(NSString *)title action:(SEL)action key:(NSString *)key mask:(NSEventModifierFlags)mask target:(id)target {
+    NSMenuItem *item=[menu addItemWithTitle:title action:action keyEquivalent:key]; item.keyEquivalentModifierMask=mask; item.target=target; return item;
 }
 - (void)buildMenu {
-    NSMenu *menu=[NSMenu new]; NSMenuItem *app=[NSMenuItem new]; [menu addItem:app];
-    NSMenu *submenu=[NSMenu new]; [submenu addItemWithTitle:@"О программе MetadataDel" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
-    [submenu addItem:NSMenuItem.separatorItem]; [submenu addItemWithTitle:@"Завершить MetadataDel" action:@selector(terminate:) keyEquivalent:@"q"]; app.submenu=submenu;
-    NSMenuItem *file=[NSMenuItem new]; [menu addItem:file]; NSMenu *fileMenu=[[NSMenu alloc] initWithTitle:@"Файл"];
-    NSMenuItem *open=[fileMenu addItemWithTitle:@"Выбрать файлы…" action:@selector(pick:) keyEquivalent:@"o"]; open.target=self;
-    NSMenuItem *reveal=[fileMenu addItemWithTitle:@"Показать выбранный файл в Finder" action:@selector(revealFile:) keyEquivalent:@"r"]; reveal.target=self;
-    NSMenuItem *remove=[fileMenu addItemWithTitle:@"Убрать выбранные из списка" action:@selector(removeFiles:) keyEquivalent:@"\b"]; remove.target=self;
-    [fileMenu addItemWithTitle:@"Закрыть окно" action:@selector(performClose:) keyEquivalent:@"w"]; file.submenu=fileMenu;
-    NSMenuItem *edit=[NSMenuItem new]; [menu addItem:edit]; NSMenu *editMenu=[[NSMenu alloc] initWithTitle:@"Правка"];
-    [editMenu addItemWithTitle:@"Копировать" action:@selector(copy:) keyEquivalent:@"c"];
-    [editMenu addItemWithTitle:@"Вставить" action:@selector(paste:) keyEquivalent:@"v"];
-    [editMenu addItemWithTitle:@"Выбрать всё" action:@selector(selectAll:) keyEquivalent:@"a"]; edit.submenu=editMenu;
-    NSApp.mainMenu=menu;
+    NSEventModifierFlags cmd=NSEventModifierFlagCommand; NSMenu *menu=[NSMenu new];
+    NSMenuItem *app=[menu addItemWithTitle:@"" action:nil keyEquivalent:@""]; NSMenu *appMenu=[NSMenu new]; app.submenu=appMenu;
+    [self item:appMenu title:@"О программе MetadataDel" action:@selector(showAbout:) key:@"" mask:0 target:self];
+    [appMenu addItem:NSMenuItem.separatorItem];
+    [self item:appMenu title:@"Настройки…" action:@selector(showSettings:) key:@"," mask:cmd target:self];
+    [appMenu addItem:NSMenuItem.separatorItem];
+    [self item:appMenu title:@"Скрыть MetadataDel" action:@selector(hide:) key:@"h" mask:cmd target:nil];
+    [self item:appMenu title:@"Скрыть остальные" action:@selector(hideOtherApplications:) key:@"h" mask:cmd|NSEventModifierFlagOption target:nil];
+    [self item:appMenu title:@"Показать все" action:@selector(unhideAllApplications:) key:@"" mask:0 target:nil];
+    [appMenu addItem:NSMenuItem.separatorItem];
+    [self item:appMenu title:@"Завершить MetadataDel" action:@selector(terminate:) key:@"q" mask:cmd target:nil];
+    NSMenuItem *file=[menu addItemWithTitle:@"" action:nil keyEquivalent:@""]; NSMenu *fileMenu=[[NSMenu alloc] initWithTitle:@"Файл"]; file.submenu=fileMenu;
+    [self item:fileMenu title:@"Выбрать файлы…" action:@selector(pick:) key:@"o" mask:cmd target:self];
+    [self item:fileMenu title:@"Очистить файлы" action:@selector(cleanFiles:) key:@"\r" mask:cmd target:self];
+    [fileMenu addItem:NSMenuItem.separatorItem];
+    [self item:fileMenu title:@"Показать в Finder" action:@selector(revealFile:) key:@"r" mask:cmd target:self];
+    [self item:fileMenu title:@"Убрать выбранные из списка" action:@selector(removeFiles:) key:@"\b" mask:cmd target:self];
+    [self item:fileMenu title:@"Очистить список" action:@selector(clearFiles:) key:@"" mask:0 target:self];
+    [fileMenu addItem:NSMenuItem.separatorItem];
+    [self item:fileMenu title:@"Закрыть окно" action:@selector(performClose:) key:@"w" mask:cmd target:nil];
+    NSMenuItem *edit=[menu addItemWithTitle:@"" action:nil keyEquivalent:@""]; NSMenu *editMenu=[[NSMenu alloc] initWithTitle:@"Правка"]; edit.submenu=editMenu;
+    [self item:editMenu title:@"Копировать" action:@selector(copy:) key:@"c" mask:cmd target:nil];
+    [self item:editMenu title:@"Вставить" action:@selector(paste:) key:@"v" mask:cmd target:nil];
+    [self item:editMenu title:@"Выбрать всё" action:@selector(selectAll:) key:@"a" mask:cmd target:nil];
+    NSMenuItem *windowItem=[menu addItemWithTitle:@"" action:nil keyEquivalent:@""]; NSMenu *windowMenu=[[NSMenu alloc] initWithTitle:@"Окно"]; windowItem.submenu=windowMenu;
+    [self item:windowMenu title:@"Свернуть" action:@selector(performMiniaturize:) key:@"m" mask:cmd target:nil];
+    [self item:windowMenu title:@"Изменить масштаб" action:@selector(performZoom:) key:@"" mask:0 target:nil];
+    [windowMenu addItem:NSMenuItem.separatorItem];
+    [self item:windowMenu title:@"Главное окно" action:@selector(showMainWindow:) key:@"1" mask:cmd target:self];
+    NSApp.mainMenu=menu; NSApp.windowsMenu=windowMenu;
+}
+- (void)showMainWindow:(id)sender { [self.window makeKeyAndOrderFront:nil]; }
+- (void)showAbout:(id)sender {
+    [NSApp orderFrontStandardAboutPanelWithOptions:@{NSAboutPanelOptionCredits:[[NSAttributedString alloc] initWithString:@"Удаляет метаданные из PDF, Word и Excel перед отправкой. Документы обрабатываются только на этом Mac." attributes:@{NSFontAttributeName:[NSFont systemFontOfSize:11],NSForegroundColorAttributeName:NSColor.secondaryLabelColor}]}];
 }
 - (NSImageView *)symbol:(NSString *)name size:(CGFloat)size {
     NSImageView *image=[NSImageView new];
@@ -95,10 +121,12 @@
     NSTextField *subtitle=[self label:@"Подготовьте документы к отправке" size:13 weight:NSFontWeightRegular]; subtitle.textColor=NSColor.secondaryLabelColor;
     NSStackView *brand=[self stack:@[[self label:@"MetadataDel" size:23 weight:NSFontWeightSemibold],subtitle] vertical:YES]; brand.spacing=3;
     self.settings=[self button:@"Настройки" action:@selector(showSettings:)]; self.settings.controlSize=NSControlSizeRegular;
+    self.settings.image=[NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:nil]; self.settings.imagePosition=NSImageLeading; self.settings.toolTip=@"Настройки · ⌘,";
     NSStackView *header=[self stack:@[icon,brand,[self spacer],self.settings] vertical:NO];
     self.integrationStatus=[self label:@"Очистка правым кликом в Finder" size:12 weight:NSFontWeightMedium];
     self.integration=[self button:@"Включить" action:@selector(installIntegration:)]; self.integration.controlSize=NSControlSizeRegular;
-    NSStackView *integrationRow=[self stack:@[[self symbol:@"cursorarrow.click" size:15],self.integrationStatus,[self spacer],self.integration] vertical:NO];
+    self.integrationIcon=[self symbol:@"cursorarrow.click" size:15];
+    NSStackView *integrationRow=[self stack:@[self.integrationIcon,self.integrationStatus,[self spacer],self.integration] vertical:NO]; integrationRow.spacing=8;
     [integrationRow.heightAnchor constraintEqualToConstant:30].active=YES;
     self.integrationNotice=[self label:@"" size:12 weight:NSFontWeightRegular]; self.integrationNotice.hidden=YES; self.integrationNotice.selectable=YES;
     self.drop=[[FileDropView alloc] initWithFrame:NSZeroRect]; self.drop.translatesAutoresizingMaskIntoConstraints=NO;
@@ -136,7 +164,8 @@
     self.detail.textContainer.widthTracksTextView=YES; self.detail.textContainerInset=NSMakeSize(0,3);
     self.detailScroll=[NSScrollView new]; self.detailScroll.documentView=self.detail; self.detailScroll.drawsBackground=NO; self.detailScroll.hasVerticalScroller=YES;
     [self.detailScroll.heightAnchor constraintEqualToConstant:50].active=YES;
-    self.backup=[NSButton checkboxWithTitle:@"Сохранять резервные копии" target:self action:@selector(backupChanged:)]; self.backup.state=NSControlStateValueOn;
+    self.backup=[NSButton checkboxWithTitle:@"Сохранять резервные копии" target:self action:@selector(backupChanged:)];
+    self.backup.state=[NSUserDefaults.standardUserDefaults boolForKey:MDBackupDefaultsKey] ? NSControlStateValueOn : NSControlStateValueOff;
     self.backupHint=[self label:@"Копии .bak — рядом. Оригиналы будут заменены." size:11 weight:NSFontWeightRegular]; self.backupHint.textColor=NSColor.secondaryLabelColor;
     NSStackView *options=[self stack:@[self.backup,self.backupHint] vertical:YES]; options.spacing=4;
     self.clean=[self button:@"Очистить файлы" action:@selector(cleanFiles:)]; self.clean.bezelColor=[NSColor colorWithSRGBRed:0.69 green:0.27 blue:0.14 alpha:1];
@@ -149,7 +178,7 @@
     root.translatesAutoresizingMaskIntoConstraints=NO; root.spacing=14; [self.window.contentView addSubview:root];
     [NSLayoutConstraint activateConstraints:@[[root.leadingAnchor constraintEqualToAnchor:self.window.contentView.leadingAnchor constant:28],[root.trailingAnchor constraintEqualToAnchor:self.window.contentView.trailingAnchor constant:-28],[root.topAnchor constraintEqualToAnchor:self.window.contentView.topAnchor constant:22],[root.bottomAnchor constraintEqualToAnchor:self.window.contentView.bottomAnchor constant:-18]]];
     for (NSView *view in root.arrangedSubviews) [view.widthAnchor constraintEqualToAnchor:root.widthAnchor].active=YES;
-    [self refresh];
+    [self backupApply]; [self refresh];
 }
 - (void)addURLs:(NSArray *)urls {
     if (self.busy) return;
@@ -224,10 +253,13 @@
     self.windowDrop.enabled=!self.busy;
     self.clearList.enabled=!self.busy && hasFiles;
     self.remove.enabled=!self.busy && self.table.selectedRowIndexes.count>0; self.reveal.enabled=!self.busy && self.table.selectedRowIndexes.count==1;
-    BOOL installed=[IntegrationManager isInstalled],stale=[IntegrationManager needsUpdate];
-    self.integrationStatus.stringValue=installed ? @"Правый клик в Finder включён" : @"Очистка правым кликом в Finder";
-    self.integration.title=installed ? @"Настроить" : stale ? @"Восстановить" : @"Включить";
-    self.integration.action=installed ? @selector(showSettings:) : @selector(installIntegration:);
+    MDIntegrationState state=[IntegrationManager state];
+    self.integrationStatus.stringValue=@[@"Очистка правым кликом в Finder выключена",@"Правый клик в Finder включён",@"Правый клик в Finder нужно обновить",@"Правый клик в Finder: откройте приложение из «Программ»"][state];
+    self.integrationIcon.image=[[NSImage imageWithSystemSymbolName:@[@"cursorarrow.click",@"checkmark.circle.fill",@"exclamationmark.triangle.fill",@"info.circle"][state] accessibilityDescription:nil] imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:15 weight:NSFontWeightRegular]];
+    self.integrationIcon.contentTintColor=state==MDIntegrationOn ? NSColor.systemGreenColor : state==MDIntegrationStale ? NSColor.systemOrangeColor : NSColor.secondaryLabelColor;
+    self.integration.title=@[@"Включить",@"Настроить",@"Обновить",@"Подробнее"][state];
+    self.integration.action=state==MDIntegrationOn || state==MDIntegrationOutsideApplications ? @selector(showSettings:) : @selector(installIntegration:);
+    [self.settingsWindow refreshBusy:self.busy notice:nil];
     if (!self.busy) {
         NSMutableArray *parts=[NSMutableArray new];
         if (pending) [parts addObject:[NSString stringWithFormat:@"Готово к очистке: %lu",pending]];
@@ -240,6 +272,10 @@
     }
 }
 - (void)backupChanged:(id)sender {
+    [NSUserDefaults.standardUserDefaults setBool:self.backup.state==NSControlStateValueOn forKey:MDBackupDefaultsKey];
+    [self backupApply]; [self.settingsWindow refreshBusy:self.busy notice:nil];
+}
+- (void)backupApply {
     BOOL on=self.backup.state==NSControlStateValueOn;
     self.backupHint.stringValue=on ? @"Копии .bak — рядом. Оригиналы будут заменены." : @"Без резервных копий. Оригиналы будут заменены.";
     self.backupHint.textColor=on ? NSColor.secondaryLabelColor : NSColor.systemOrangeColor;
@@ -284,24 +320,32 @@
         [self updateDetail]; self.progress.doubleValue=++self.completed; [self.table reloadData]; [self cleanNext];
     }];
 }
+- (void)showIntegrationNotice:(NSString *)text {
+    self.integrationNotice.hidden=text.length==0; self.integrationNotice.stringValue=text ?: @"";
+    [self.settingsWindow refreshBusy:self.busy notice:text];
+}
 - (void)installIntegration:(id)sender {
-    if (self.busy) return; self.busy=YES; [self refresh]; self.integrationNotice.hidden=NO; self.integrationNotice.stringValue=@"Настраиваю очистку правым кликом…";
-    [IntegrationManager installWithCompletion:^(NSError *error){ self.busy=NO; [self refresh]; self.integrationNotice.stringValue=error.localizedDescription ?: @"Готово. Finder → Быстрые действия → Удалить метаданные (MetadataDel)."; if (self.closeAfterWork) [NSApp terminate:nil]; }];
+    if (self.busy) return; self.busy=YES; [self refresh]; [self showIntegrationNotice:@"Настраиваю очистку правым кликом…"];
+    [IntegrationManager installWithCompletion:^(NSError *error){ self.busy=NO; [self refresh]; [self showIntegrationNotice:error.localizedDescription ?: @"Готово. Finder → Быстрые действия → Удалить метаданные (MetadataDel)."]; if (self.closeAfterWork) [NSApp terminate:nil]; }];
+}
+- (void)removeIntegration {
+    if (self.busy) return; self.busy=YES; [self refresh]; [self showIntegrationNotice:@"Отключаю очистку правым кликом…"];
+    [IntegrationManager removeWithCompletion:^(NSError *error){ self.busy=NO; [self refresh]; [self showIntegrationNotice:error.localizedDescription ?: @"Правый клик отключён. Документы и копии сохранены."]; if (self.closeAfterWork) [NSApp terminate:nil]; }];
 }
 - (void)showSettings:(id)sender {
-    if (self.busy) return;
-    NSAlert *alert=[NSAlert new]; alert.messageText=@"MetadataDel · Настройки";
-    alert.informativeText=@"Правый клик в Finder работает без открытого окна. Резервные копии для него всегда включены.\n\nЗдесь можно восстановить интеграцию или удалить команды и действие Finder. Документы и их копии сохранятся. Для удаления самого приложения переместите его в Корзину.";
-    [alert addButtonWithTitle:@"Готово"]; [alert addButtonWithTitle:@"Восстановить Finder"]; [alert addButtonWithTitle:@"Удалить интеграцию"];
-    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response){
-        if (response==NSAlertSecondButtonReturn) [self installIntegration:nil];
-        else if (response==NSAlertThirdButtonReturn) {
-            self.busy=YES; [self refresh]; self.integrationNotice.hidden=NO; self.integrationNotice.stringValue=@"Удаляю интеграцию Finder…"; [IntegrationManager removeWithCompletion:^(NSError *error){ self.busy=NO; [self refresh]; self.integrationNotice.stringValue=error.localizedDescription ?: @"Действие Finder и команды удалены. Документы сохранены."; if (self.closeAfterWork) [NSApp terminate:nil]; }];
-        }
-    }];
+    if (!self.settingsWindow) {
+        self.settingsWindow=[SettingsWindow new]; __weak AppDelegate *weakSelf=self;
+        self.settingsWindow.onInstall=^{ [weakSelf installIntegration:nil]; };
+        self.settingsWindow.onRemove=^{ [weakSelf removeIntegration]; };
+        self.settingsWindow.onBackupChanged=^(BOOL on){ weakSelf.backup.state=on ? NSControlStateValueOn : NSControlStateValueOff; [weakSelf backupApply]; };
+    }
+    [self.settingsWindow refreshBusy:self.busy notice:self.integrationNotice.hidden ? nil : self.integrationNotice.stringValue];
+    [self.settingsWindow showWindow:nil];
 }
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
     if (item.action==@selector(pick:)) return !self.busy;
+    if (item.action==@selector(clearFiles:)) return self.clearList.enabled;
+    if (item.action==@selector(cleanFiles:)) return self.clean.enabled;
     if (item.action==@selector(removeFiles:)) return self.remove.enabled;
     if (item.action==@selector(revealFile:)) return self.reveal.enabled;
     return YES;

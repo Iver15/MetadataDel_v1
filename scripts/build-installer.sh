@@ -24,6 +24,7 @@ fi
 
 echo "Generating Windows icon..."
 python3 "$ROOT_DIR/scripts/render_windows_icon.py" "$ROOT_DIR/icon.svg" "$ROOT_DIR/MetadataDel.Cli/app.ico"
+python3 "$ROOT_DIR/scripts/render_installer_images.py" "$ROOT_DIR/icon.svg" "$ROOT_DIR/installer/images"
 
 echo "Publishing win-x64 build..."
 "$DOTNET_BIN" publish "$ROOT_DIR/MetadataDel.Cli/MetadataDel.Cli.csproj" \

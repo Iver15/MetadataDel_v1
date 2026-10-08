@@ -36,6 +36,8 @@ ChangesAssociations=yes
 ChangesEnvironment=yes
 DisableWelcomePage=no
 DisableReadyMemo=no
+WizardImageFile=images\wizard-202.bmp,images\wizard-253.bmp,images\wizard-303.bmp
+WizardSmallImageFile=images\wizard-small-58.bmp,images\wizard-small-73.bmp,images\wizard-small-87.bmp,images\wizard-small-116.bmp
 
 [Files]
 ; Ожидается, что предварительно выполнен publish в каталог ..\publish
@@ -49,9 +51,9 @@ Type: filesandordirs; Name: "{app}\tools"
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Tasks]
-Name: "ctxmenu"; Description: "Добавить пункт контекстного меню Проводника"; Flags: checkedonce
-Name: "sendto"; Description: "Добавить пункт в меню Отправить"; Flags: checkedonce
-Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; Flags: unchecked
+Name: "ctxmenu"; Description: "Пункт «Удалить метаданные» в контекстном меню Проводника"; GroupDescription: "Быстрый доступ:"; Flags: checkedonce
+Name: "sendto"; Description: "Пункт «Удалить метаданные» в меню «Отправить»"; GroupDescription: "Быстрый доступ:"; Flags: checkedonce
+Name: "desktopicon"; Description: "Ярлык MetadataDel на рабочем столе"; GroupDescription: "Быстрый доступ:"; Flags: unchecked
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--install-shell"; Flags: runhidden waituntilterminated skipifdoesntexist; Tasks: ctxmenu; StatusMsg: "Настройка контекстного меню..."
@@ -64,6 +66,7 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall-shell"; Flags: runhi
 Type: files; Name: "{userappdata}\Microsoft\Windows\SendTo\{#MySendToFileName}"
 ; Журналы содержат пути очищенных файлов, поэтому удаляются вместе с программой.
 Type: filesandordirs; Name: "{localappdata}\MetadataDel\logs"
+Type: files; Name: "{localappdata}\MetadataDel\settings.json"
 Type: dirifempty; Name: "{localappdata}\MetadataDel"
 
 [Icons]
@@ -76,25 +79,26 @@ procedure ApplyBranding();
 begin
   WizardForm.Font.Name := 'Segoe UI';
 
-  WizardForm.WelcomeLabel1.Caption := 'MetadataDel';
+  WizardForm.WelcomeLabel1.Caption := 'Установка MetadataDel';
   WizardForm.WelcomeLabel1.Font.Name := 'Segoe UI Semibold';
-  WizardForm.WelcomeLabel1.Font.Size := 16;
-  WizardForm.WelcomeLabel1.Font.Style := [fsBold];
+  WizardForm.WelcomeLabel1.Font.Size := 15;
+  WizardForm.WelcomeLabel1.Font.Style := [];
 
   WizardForm.WelcomeLabel2.Caption :=
-    'Быстрая и аккуратная установка без ручной настройки.' + #13#10#13#10 +
-    'Setup установит программу и подготовит интеграцию с Проводником.';
+    'MetadataDel удаляет автора, историю правок, комментарии и другие скрытые сведения ' +
+    'из PDF, Word и Excel перед отправкой документа.' + #13#10#13#10 +
+    'Файлы обрабатываются только на этом компьютере. Установка займёт меньше минуты ' +
+    'и не требует прав администратора.';
   WizardForm.WelcomeLabel2.Font.Name := 'Segoe UI';
 
   WizardForm.PageNameLabel.Font.Name := 'Segoe UI Semibold';
-  WizardForm.PageNameLabel.Font.Style := [fsBold];
-  WizardForm.PageNameLabel.Font.Size := 12;
-
+  WizardForm.PageNameLabel.Font.Style := [];
+  WizardForm.PageNameLabel.Font.Size := 11;
   WizardForm.PageDescriptionLabel.Font.Name := 'Segoe UI';
-  WizardForm.PageDescriptionLabel.Caption := 'Один установщик для программы и интеграции с Проводником.';
 
-  WizardForm.SelectTasksLabel.Caption := 'Выберите дополнительные действия:';
-  WizardForm.ReadyLabel.Caption := 'Проверьте параметры установки. Когда всё готово, нажмите "Установить".';
+  WizardForm.FinishedHeadingLabel.Font.Name := 'Segoe UI Semibold';
+  WizardForm.FinishedHeadingLabel.Font.Size := 15;
+  WizardForm.FinishedHeadingLabel.Font.Style := [];
 end;
 
 procedure InitializeWizard();
@@ -137,42 +141,45 @@ begin
     InstallOrRemoveSendTo();
 end;
 
+function FinishedText(): string;
+begin
+  Result := 'Откройте MetadataDel из меню «Пуск» и перетащите документы в окно.';
+  if WizardIsTaskSelected('ctxmenu') then
+    Result := Result + #13#10#13#10 + 'Или щёлкните файл правой кнопкой мыши в Проводнике и выберите «Удалить метаданные». ' +
+      'В Windows 11 пункт находится в разделе «Показать дополнительные параметры».';
+  if WizardIsTaskSelected('sendto') then
+    Result := Result + #13#10#13#10 + 'Также доступно меню «Отправить» → «Удалить метаданные».';
+  Result := Result + #13#10#13#10 + 'Из Проводника файлы перезаписываются без резервных копий. ' +
+    'Для важных документов используйте окно программы с включёнными копиями.';
+end;
+
 procedure CurPageChanged(CurPageID: Integer);
 begin
   if CurPageID = wpSelectTasks then
   begin
-    WizardForm.PageNameLabel.Caption := 'Дополнительные возможности';
-    WizardForm.PageDescriptionLabel.Caption := 'Выберите, какие точки входа MetadataDel нужно создать для пользователя.';
+    WizardForm.PageNameLabel.Caption := 'Быстрый доступ';
+    WizardForm.PageDescriptionLabel.Caption := 'Откуда удобнее запускать очистку? Всё можно изменить позже в настройках программы.';
   end
   else if CurPageID = wpReady then
   begin
     WizardForm.PageNameLabel.Caption := 'Всё готово к установке';
-    WizardForm.PageDescriptionLabel.Caption := 'MetadataDel будет установлен вместе с нужными служебными файлами.';
-    WizardForm.ReadyLabel.Caption := 'Нажмите "Установить", чтобы начать установку.';
+    WizardForm.PageDescriptionLabel.Caption := 'Проверьте параметры и нажмите «Установить».';
   end
   else if CurPageID = wpFinished then
   begin
     WizardForm.FinishedHeadingLabel.Caption := 'MetadataDel установлен';
-    WizardForm.FinishedHeadingLabel.Font.Name := 'Segoe UI Semibold';
-    WizardForm.FinishedHeadingLabel.Font.Style := [fsBold];
-    WizardForm.FinishedLabel.Caption :=
-      'Программа готова к работе. Контекстное меню и пункт "Отправить" можно использовать сразу после завершения установки.';
-  end
-  else
-  begin
-    ApplyBranding();
+    WizardForm.FinishedLabel.Caption := FinishedText();
   end;
 end;
 
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
 begin
   Result :=
-    'Будет установлено:' + NewLine +
-    Space + '- MetadataDel' + NewLine +
-    Space + '- интеграция с Проводником и пункт "Отправить" при выборе соответствующих опций' + NewLine + NewLine +
+    'Программа:' + NewLine +
+    Space + 'MetadataDel {#MyAppVersion}' + NewLine + NewLine +
     'Папка установки:' + NewLine +
     Space + ExpandConstant('{app}');
 
   if MemoTasksInfo <> '' then
-    Result := Result + NewLine + NewLine + 'Дополнительно:' + NewLine + MemoTasksInfo;
+    Result := Result + NewLine + NewLine + MemoTasksInfo;
 end;

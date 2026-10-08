@@ -43,9 +43,18 @@
         dispatch_async(dispatch_get_main_queue(), ^{ completion(error); });
     });
 }
-+ (void)installWithCompletion:(void (^)(NSError *))completion {
++ (BOOL)isInApplications {
     NSString *path=NSBundle.mainBundle.bundlePath;
-    if (![path hasPrefix:@"/Applications/"] && ![path hasPrefix:[NSHomeDirectory() stringByAppendingString:@"/Applications/"]]) {
+    return [path hasPrefix:@"/Applications/"] || [path hasPrefix:[NSHomeDirectory() stringByAppendingString:@"/Applications/"]];
+}
++ (MDIntegrationState)state {
+    BOOL stale=[self needsUpdate];
+    if ([self isInstalled] && !stale) return MDIntegrationOn;
+    if (![self isInApplications]) return MDIntegrationOutsideApplications;
+    return stale ? MDIntegrationStale : MDIntegrationOff;
+}
++ (void)installWithCompletion:(void (^)(NSError *))completion {
+    if (![self isInApplications]) {
         completion([NSError errorWithDomain:@"MetadataDel" code:2 userInfo:@{NSLocalizedDescriptionKey:@"Сначала скопируйте MetadataDel в папку «Программы» и откройте приложение оттуда."}]); return;
     }
     [self runScript:@"install-app-integration.sh" args:@[NSBundle.mainBundle.resourcePath, NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"]] completion:completion];

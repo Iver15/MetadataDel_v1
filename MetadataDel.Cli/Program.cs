@@ -486,10 +486,35 @@ internal static class SelfInstaller
         {
             var logs = Path.Combine(appData, "logs");
             if (Directory.Exists(logs)) Directory.Delete(logs, recursive: true);
+            var settings = Path.Combine(appData, "settings.json");
+            if (File.Exists(settings)) File.Delete(settings);
             if (Directory.Exists(appData) && !Directory.EnumerateFileSystemEntries(appData).Any()) Directory.Delete(appData);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
+
+    // Managed: MSI для всех пользователей, правый клик меняет только администратор.
+    public static ShellIntegrationState GetShellIntegrationState()
+    {
+        if (IsManagedInstall()) return ShellIntegrationState.Managed;
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey($"Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\{MenuName}\\command");
+            if (key?.GetValue(null) is not string command) return ShellIntegrationState.Off;
+            var exe = Environment.ProcessPath;
+            return exe != null && command.StartsWith($"\"{exe}\"", StringComparison.OrdinalIgnoreCase) ? ShellIntegrationState.On : ShellIntegrationState.Stale;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException) { return ShellIntegrationState.Off; }
+    }
+
+    public static bool IsManagedInstall()
+    {
+        var root = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        return Environment.ProcessPath?.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    public static string LogsDirectory =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), AppName, "logs");
 
     public static InstallationDiagnostics GetDiagnostics() =>
         new(ShellExtensions, Array.Empty<string>());
@@ -683,5 +708,6 @@ internal static class SelfInstaller
 
     internal sealed record InstallSummary(string InstallDirectory, IReadOnlyList<string> RegisteredExtensions, IReadOnlyList<string> Warnings);
     internal sealed record UninstallSummary(string InstallDirectory, bool FilesRemoved, bool RemovalScheduled);
+    internal enum ShellIntegrationState { Off, On, Stale, Managed }
     internal sealed record InstallationDiagnostics(IReadOnlyList<string> RegisterableExtensions, IReadOnlyList<string> Warnings);
 }

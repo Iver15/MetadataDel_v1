@@ -16,7 +16,9 @@ internal sealed class MainForm : Form
     private readonly Button clearList = Button("Очистить список");
     private readonly Button reveal = Button("Показать в папке");
     private readonly Button settings = Button("Настройки");
-    private readonly CheckBox backup = new() { Text = "Сохранять резервные копии", Checked = true, AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
+    private readonly AppSettings appSettings = AppSettings.Load();
+    private readonly CheckBox backup = new() { Text = "Сохранять резервные копии", AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
+    private readonly Label integrationStatus = Label("", 10);
     private readonly Label backupHint = Label("Копии .bak — рядом. Оригиналы будут заменены.", 9);
     private readonly Label summary = Label("", 10);
     private readonly TextBox detail = new() { Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical, BackColor = SystemColors.Window, ForeColor = SystemColors.WindowText, AccessibleName = "Подробности выбранного документа" };
@@ -57,7 +59,7 @@ internal sealed class MainForm : Form
         header.Controls.Add(settings, 1, 0); layout.Controls.Add(header, 0, 0);
         var integration = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
         integration.ColumnStyles.Add(new(SizeType.Percent, 100)); integration.ColumnStyles.Add(new(SizeType.AutoSize));
-        integration.Controls.Add(Label("Очистка правым кликом в Проводнике", 10), 0, 0);
+        integration.Controls.Add(integrationStatus, 0, 0);
         var configure = new LinkLabel { Text = "Настроить", AutoSize = true, AccessibleName = "Настроить очистку правым кликом", Margin = new Padding(0, 6, 0, 0) };
         configure.LinkColor = SystemColors.HotTrack; configure.Click += (_, _) => { if (!busy) ShowSettings(); };
         integration.Controls.Add(configure, 1, 0); layout.Controls.Add(integration, 0, 1);
@@ -91,7 +93,8 @@ internal sealed class MainForm : Form
         clear.Click += (_, _) => RemoveSelected();
         clearList.Click += (_, _) => { if (!busy) { files.Items.Clear(); RefreshActions(); UpdateDetail(); } };
         reveal.Click += (_, _) => Reveal(); settings.Click += (_, _) => ShowSettings();
-        backup.CheckedChanged += (_, _) => UpdateBackupHint();
+        backup.Checked = appSettings.Backup;
+        backup.CheckedChanged += (_, _) => { UpdateBackupHint(); if (appSettings.Backup != backup.Checked) { appSettings.Backup = backup.Checked; appSettings.Save(); } };
         files.SelectedIndexChanged += (_, _) => { RefreshActions(); UpdateDetail(); };
         files.DoubleClick += (_, _) => Reveal();
         files.KeyDown += (_, e) => {
@@ -106,7 +109,7 @@ internal sealed class MainForm : Form
         };
         DpiChanged += (_, _) => { rowHeight.ImageSize = new Size(1, LogicalToDeviceUnits(52)); RefreshActions(); };
         SystemColorsChanged += (_, _) => ApplyPalette();
-        RegisterDrop(this); ApplyPalette(); RefreshActions();
+        RegisterDrop(this); ApplyPalette(); RefreshActions(); UpdateIntegrationStatus();
     }
 
     private static Label Label(string text, float size, FontStyle style = FontStyle.Regular) => new()
@@ -279,23 +282,14 @@ internal sealed class MainForm : Form
     private void ShowSettings()
     {
         if (busy) return;
-        var menu = new ContextMenuStrip();
-        menu.Closed += (_, _) => menu.Dispose();
-        menu.Items.Add("Восстановить очистку правым кликом", null, (_, _) =>
-        {
-            try
-            {
-                var root = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-                if (Environment.ProcessPath?.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) == true)
-                { MessageBox.Show(this, "Для корпоративной установки используйте восстановление MSI через администратора.", "Интеграция с Проводником"); return; }
-                var result = SelfInstaller.InstallShellIntegration();
-                MessageBox.Show(this, "Контекстное меню настроено для: " + string.Join(", ", result.RegisteredExtensions), "Готово");
-            }
-            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Ошибка настройки"); }
-        });
-        menu.Items.Add("Управление установленными приложениями", null, (_, _) => Process.Start(new ProcessStartInfo("ms-settings:appsfeatures") { UseShellExecute = true }));
-        menu.Items.Add("О программе", null, (_, _) => MessageBox.Show(this, "MetadataDel\nУдаление метаданных из документов.\n\nПравый клик в Проводнике работает независимо от этого окна.\nФлажок резервных копий относится только к этому окну.", "MetadataDel"));
-        menu.Items.Add("Диагностика", null, (_, _) => { var result = SelfInstaller.GetDiagnostics(); MessageBox.Show(this, "Форматы: " + string.Join(", ", result.RegisterableExtensions) + "\n" + string.Join("\n", result.Warnings), "Диагностика"); });
-        menu.Show(settings, new Point(0, settings.Height));
+        using (var dialog = new SettingsForm(appSettings)) dialog.ShowDialog(this);
+        backup.Checked = appSettings.Backup; UpdateIntegrationStatus();
     }
+    private void UpdateIntegrationStatus() => integrationStatus.Text = SelfInstaller.GetShellIntegrationState() switch
+    {
+        SelfInstaller.ShellIntegrationState.On => "✓  Правый клик в Проводнике включён",
+        SelfInstaller.ShellIntegrationState.Stale => "!  Правый клик в Проводнике нужно обновить",
+        SelfInstaller.ShellIntegrationState.Managed => "Правый клик в Проводнике настроен администратором",
+        _ => "Очистка правым кликом в Проводнике выключена",
+    };
 }

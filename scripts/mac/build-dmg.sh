@@ -19,6 +19,8 @@ SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 WAIT_FOR_NOTARIZATION="${WAIT_FOR_NOTARIZATION:-0}"
 DMG_SIZE="${DMG_SIZE:-300m}"
+DMG_LAYOUT="${DMG_LAYOUT:-1}"
+APPLICATIONS_LINK="Программы"
 
 if [ -z "$RID" ]; then
   case "$(uname -m)" in
@@ -100,6 +102,9 @@ clang -arch "$APP_ARCH" -mmacosx-version-min=12.0 -fobjc-arc scripts/mac/app/*.m
 clang -fobjc-arc scripts/mac/installer/set_file_icon.m \
   -framework Cocoa \
   -o "$TOOLS_DIR/set-file-icon"
+clang -fobjc-arc scripts/mac/installer/render_dmg_background.m \
+  -framework Cocoa \
+  -o "$TOOLS_DIR/render-dmg-background"
 
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
@@ -118,7 +123,11 @@ echo "[INFO] Упаковка DMG..."
 rm -rf "$DMG_DIR" "$DMG_PATH" "$STAGING_DMG_PATH"
 mkdir -p "$DMG_DIR"
 cp -R "$APP_DIR" "$DMG_DIR/"
-ln -s /Applications "$DMG_DIR/Applications"
+ln -s /Applications "$DMG_DIR/$APPLICATIONS_LINK"
+"$TOOLS_DIR/render-dmg-background" "$DIST_DIR/dmg-background"
+mkdir -p "$DMG_DIR/.background"
+tiffutil -cathidpicheck "$DIST_DIR/dmg-background/background.png" "$DIST_DIR/dmg-background/background@2x.png" \
+  -out "$DMG_DIR/.background/background.tiff" >/dev/null
 
 hdiutil create \
   -volname "$PRODUCT_NAME" \
@@ -129,16 +138,58 @@ hdiutil create \
   -size "$DMG_SIZE" \
   "$STAGING_DMG_PATH"
 
+# Finder сохраняет вид окна в .DS_Store тома: фон, размер окна и позиции значков.
+# Без доступа к Finder (headless CI) DMG остаётся рабочим, просто без оформления.
+apply_dmg_layout() {
+  if [ "$DMG_LAYOUT" != "1" ]; then
+    echo "[INFO] Оформление окна DMG пропущено (DMG_LAYOUT=$DMG_LAYOUT)"
+    return
+  fi
+  if ! /usr/bin/osascript - "$mount_dir" "$APP_NAME.app" "$APPLICATIONS_LINK" <<'APPLESCRIPT'
+on run argv
+  set mountPath to item 1 of argv
+  tell application "Finder"
+    set dmgDisk to disk of (POSIX file mountPath as alias)
+    tell dmgDisk
+      open
+      delay 1
+      set current view of container window to icon view
+      set toolbar visible of container window to false
+      set statusbar visible of container window to false
+      set bounds of container window to {200, 140, 840, 568}
+      set viewOptions to icon view options of container window
+      set arrangement of viewOptions to not arranged
+      set icon size of viewOptions to 112
+      set text size of viewOptions to 13
+      set background picture of viewOptions to file ".background:background.tiff"
+      set position of item (item 2 of argv) of container window to {170, 200}
+      set position of item (item 3 of argv) of container window to {470, 200}
+      set bounds of container window to {200, 140, 840, 568}
+      update without registering applications
+      delay 2
+      close
+    end tell
+  end tell
+end run
+APPLESCRIPT
+  then
+    echo "[WARN] Не удалось оформить окно DMG через Finder; образ собран без фона" >&2
+  fi
+  sync
+}
+
 mount_dir="$(mktemp -d)"
 cleanup_mount() {
   hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
   rmdir "$mount_dir" 2>/dev/null || true
 }
 trap cleanup_mount EXIT
-hdiutil attach "$STAGING_DMG_PATH" -mountpoint "$mount_dir" -nobrowse -readwrite >/dev/null
+hdiutil attach "$STAGING_DMG_PATH" -mountpoint "$mount_dir" -readwrite -noautoopen >/dev/null
 cp "$RESOURCES_DIR/AppIcon.icns" "$mount_dir/.VolumeIcon.icns"
 SetFile -a C "$mount_dir"
 SetFile -a V "$mount_dir/.VolumeIcon.icns"
+SetFile -a V "$mount_dir/.background"
+apply_dmg_layout
 sync
 hdiutil detach "$mount_dir" >/dev/null
 rmdir "$mount_dir"

@@ -10,8 +10,11 @@
     completion(@{@"success":@(ok), @"outputPath":ok ? url.path : NSNull.null, @"message":ok ? NSNull.null : @"Файл повреждён. Выберите другую копию документа."},nil);
 }
 @end
+@interface SettingsWindow (Tests)
+- (void)backupClicked:(id)sender;
+@end
 int main(void) { @autoreleasepool {
-    [NSApplication sharedApplication];
+    [NSApplication sharedApplication]; [NSUserDefaults.standardUserDefaults removeObjectForKey:MDBackupDefaultsKey];
     AppDelegate *app=[AppDelegate new]; app.files=[NSMutableArray new];
     app.runner=[PreviewRunner new]; [app buildWindow];
     [app addURLs:@[@"/tmp/good.docx",@"/tmp/bad.docx"]];
@@ -34,9 +37,15 @@ int main(void) { @autoreleasepool {
     app.busy=NO; [app clearFiles:nil];
     app.backup.state=NSControlStateValueOff; [app backupChanged:nil];
     NSCAssert([app.backupHint.stringValue containsString:@"Без резервных копий"],@"Backup-off state is explicit");
+    NSCAssert(![NSUserDefaults.standardUserDefaults boolForKey:MDBackupDefaultsKey],@"Backup choice persists between launches");
+    [app showSettings:nil];
+    NSCAssert(app.settingsWindow.backup.state==NSControlStateValueOff,@"Settings mirror the main window backup choice");
+    app.settingsWindow.backup.state=NSControlStateValueOn; [app.settingsWindow backupClicked:nil];
+    NSCAssert(app.backup.state==NSControlStateValueOn && [app.backupHint.stringValue containsString:@".bak"],@"Settings update the main window backup choice");
+    [app.settingsWindow close]; [NSUserDefaults.standardUserDefaults removeObjectForKey:MDBackupDefaultsKey];
     [app addURLs:@[@"/tmp/bad.docx"]]; [app cleanFiles:nil];
     StatusCellView *cell=(StatusCellView *)[app tableView:app.table viewForTableColumn:app.table.tableColumns[1] row:0];
     cell.backgroundStyle=NSBackgroundStyleEmphasized;
     NSCAssert([cell.statusLabel.textColor isEqual:NSColor.alternateSelectedControlTextColor],@"Selected failure uses readable system text");
-    puts("Desktop UI: summary, selection, empty state, distinct paths, busy drop, backup copy and contrast PASS");
+    puts("Desktop UI: summary, selection, empty state, distinct paths, busy drop, backup copy, settings sync and contrast PASS");
 } return 0; }
