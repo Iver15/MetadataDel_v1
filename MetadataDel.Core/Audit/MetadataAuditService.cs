@@ -128,7 +128,8 @@ public static class MetadataAuditService
     private static MetadataAuditResult AuditDocx(string path)
     {
         var findings = new List<string>();
-        using (var document = WordprocessingDocument.Open(path, false))
+        using (var stream = File.OpenRead(path))
+        using (var document = WordprocessingDocument.Open(stream, false))
             WordPrivacySanitizer.HasResidualMetadata(document, findings);
         return new MetadataAuditResult(path, "docx", WithPackageScan(path, findings.Select((f, i) => new MetadataAuditFinding($"docx.{i}", f))));
     }
@@ -136,7 +137,8 @@ public static class MetadataAuditService
     private static MetadataAuditResult AuditXlsx(string path)
     {
         var findings = new List<string>();
-        using (var document = SpreadsheetDocument.Open(path, false))
+        using (var stream = File.OpenRead(path))
+        using (var document = SpreadsheetDocument.Open(stream, false))
             SpreadsheetPrivacySanitizer.HasResidualMetadata(document, findings);
         return new MetadataAuditResult(path, "xlsx", WithPackageScan(path, findings.Select((f, i) => new MetadataAuditFinding($"xlsx.{i}", f))));
     }

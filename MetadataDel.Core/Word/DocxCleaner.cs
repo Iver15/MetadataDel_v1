@@ -15,7 +15,9 @@ public sealed class DocxCleaner : IFileCleaner
         {
             using var transaction = new FileCleaningTransaction(path, options, ct);
             var context = new OpenXmlSanitizeContext(ct);
-            using (var document = WordprocessingDocument.Open(transaction.WorkingPath, true))
+            // Own the stream even if OpenXML throws before returning a document.
+            using (var stream = new FileStream(transaction.WorkingPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            using (var document = WordprocessingDocument.Open(stream, true))
                 WordPrivacySanitizer.Sanitize(document, context);
             OpenXmlZipAttributes.Normalize(transaction.WorkingPath);
             var audit = MetadataAuditService.Audit(transaction.WorkingPath);

@@ -54,10 +54,12 @@ public sealed class DesktopTests : IDisposable
         Assert.Equal(original, File.ReadAllBytes(path));
         Assert.False(File.Exists(path + ".bak"));
     }
-    [Fact]
-    public async Task BrokenFileReturnsFailureWithoutOutputPath()
+    [Theory]
+    [InlineData("docx")]
+    [InlineData("xlsx")]
+    public async Task BrokenFileReturnsFailureWithoutOutputPath(string extension)
     {
-        var path = Path.Combine(dir, "broken.docx");
+        var path = Path.Combine(dir, "broken." + extension);
         File.WriteAllText(path, "broken");
         using var output = new StringWriter();
         Assert.Equal(2, await GuiCleanCommand.RunAsync(["--gui-clean", "--", path], output, TextWriter.Null));
@@ -66,6 +68,19 @@ public sealed class DesktopTests : IDisposable
         Assert.Contains("поврежд", json.RootElement.GetProperty("message").GetString());
         Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("outputPath").ValueKind);
         Assert.Equal("broken", File.ReadAllText(path));
+        Assert.Empty(Directory.GetFiles(dir, ".*.tmp.*"));
+        using var exclusive = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+    }
+    [Theory]
+    [InlineData("docx")]
+    [InlineData("xlsx")]
+    public void BrokenOpenXmlAuditReleasesFile(string extension)
+    {
+        var path = Path.Combine(dir, "broken." + extension);
+        File.WriteAllText(path, "broken");
+        Assert.ThrowsAny<Exception>(() => MetadataDel.Core.Audit.MetadataAuditService.Audit(path));
+        using var exclusive = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        Assert.Equal(6, exclusive.Length);
     }
     [Fact]
     public async Task GuiRejectsDirectoriesUnsupportedFilesAndLinks()
