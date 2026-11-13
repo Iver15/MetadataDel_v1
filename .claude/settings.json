@@ -1,0 +1,7 @@
+{
+  "enabledPlugins": {
+    "gitnexus-kit@vibecode-kits": true,
+    "feature-dev@claude-plugins-official": true,
+    "context7@claude-plugins-official": true
+  }
+}
