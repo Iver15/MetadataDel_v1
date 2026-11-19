@@ -6,8 +6,9 @@
 @end
 @implementation PreviewRunner
 - (void)cleanFileURL:(NSURL *)url backup:(BOOL)backup completion:(void (^)(NSDictionary *, NSError *))completion {
-    BOOL ok=[url.lastPathComponent isEqual:@"good.docx"];
-    completion(@{@"success":@(ok), @"outputPath":ok ? url.path : NSNull.null, @"message":ok ? NSNull.null : @"Файл повреждён. Выберите другую копию документа."},nil);
+    BOOL partial=[url.lastPathComponent isEqual:@"partial.docx"], ok=partial || [url.lastPathComponent isEqual:@"good.docx"];
+    completion(@{@"success":@(ok), @"incomplete":@(partial), @"outputPath":ok ? url.path : NSNull.null, @"backupPath":ok ? @"/tmp/Backups/good.docx" : NSNull.null,
+                 @"message":partial ? @"Зашифрованный фрагмент не проверен." : ok ? NSNull.null : @"Файл повреждён. Выберите другую копию документа."},nil);
 }
 @end
 @interface SettingsWindow (Tests)
@@ -17,9 +18,13 @@ int main(void) { @autoreleasepool {
     [NSApplication sharedApplication]; [NSUserDefaults.standardUserDefaults removeObjectForKey:MDBackupDefaultsKey];
     AppDelegate *app=[AppDelegate new]; app.files=[NSMutableArray new];
     app.runner=[PreviewRunner new]; [app buildWindow];
-    [app addURLs:@[@"/tmp/good.docx",@"/tmp/bad.docx"]];
+    [app addURLs:@[@"/tmp/good.docx",@"/tmp/bad.docx",@"/tmp/partial.docx"]];
     [app cleanFiles:nil];
     NSString *result=[app.summary.stringValue copy];
+    NSCAssert([result containsString:@"Очищено: 1"] && [result containsString:@"Очищено не полностью: 1"],@"Partial cleaning is counted separately, never as cleaned: %@",result);
+    NSCAssert([app.files[2][@"kind"] isEqual:@"partial"] && [app.files[2][@"state"] isEqual:@"Очищен не полностью"],@"Partial file shows a warning state");
+    NSCAssert([app.files[2][@"message"] containsString:@"Проверьте документ"] && [app.files[2][@"message"] containsString:@"Зашифрованный"],@"Partial file explains what remains");
+    NSCAssert([app.files[0][@"message"] containsString:@"папке резервных копий"],@"Result mentions the private backups folder");
     [app.table selectRowIndexes:[NSIndexSet indexSetWithIndex:1] byExtendingSelection:NO];
     [app tableViewSelectionDidChange:[NSNotification notificationWithName:NSTableViewSelectionDidChangeNotification object:app.table]];
     NSCAssert([app.summary.stringValue isEqual:result], @"Selecting a result must preserve the batch summary");
@@ -41,11 +46,11 @@ int main(void) { @autoreleasepool {
     [app showSettings:nil];
     NSCAssert(app.settingsWindow.backup.state==NSControlStateValueOff,@"Settings mirror the main window backup choice");
     app.settingsWindow.backup.state=NSControlStateValueOn; [app.settingsWindow backupClicked:nil];
-    NSCAssert(app.backup.state==NSControlStateValueOn && [app.backupHint.stringValue containsString:@".bak"],@"Settings update the main window backup choice");
+    NSCAssert(app.backup.state==NSControlStateValueOn && [app.backupHint.stringValue containsString:@"папке резервных копий"],@"Settings update the main window backup choice");
     [app.settingsWindow close]; [NSUserDefaults.standardUserDefaults removeObjectForKey:MDBackupDefaultsKey];
     [app addURLs:@[@"/tmp/bad.docx"]]; [app cleanFiles:nil];
     StatusCellView *cell=(StatusCellView *)[app tableView:app.table viewForTableColumn:app.table.tableColumns[1] row:0];
     cell.backgroundStyle=NSBackgroundStyleEmphasized;
     NSCAssert([cell.statusLabel.textColor isEqual:NSColor.alternateSelectedControlTextColor],@"Selected failure uses readable system text");
-    puts("Desktop UI: summary, selection, empty state, distinct paths, busy drop, backup copy, settings sync and contrast PASS");
+    puts("Desktop UI: summary, partial state, selection, empty state, distinct paths, busy drop, backup copy, settings sync and contrast PASS");
 } return 0; }

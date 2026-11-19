@@ -62,6 +62,46 @@ public static class MetadataAuditService
         };
     }
 
+    /// <summary>
+    /// Аудит для пользователя (--audit): содержимое документа и сведения файловой системы, которые уходят вместе
+    /// с файлом — «Где получен» и теги Finder (macOS), адрес загрузки и другие NTFS-потоки (Windows).
+    /// Очистители проверяют рабочую копию через <see cref="Audit"/>: эти сведения снимаются при публикации результата.
+    /// </summary>
+    public static MetadataAuditResult AuditWithFileSystem(string path)
+    {
+        var result = Audit(path);
+        var extra = FileSystemFindings(path);
+        return extra.Count == 0 ? result : result with { Findings = result.Findings.Concat(extra).ToList() };
+    }
+
+    internal static List<MetadataAuditFinding> FileSystemFindings(string path)
+    {
+        var findings = new List<MetadataAuditFinding>();
+        try
+        {
+            if (OperatingSystem.IsMacOS() || OperatingSystem.IsLinux())
+            {
+                var names = Cleaning.ExtendedAttributes.List(path).Where(Cleaning.ExtendedAttributes.MustRemove).ToList();
+                if (names.Count > 0)
+                    findings.Add(new MetadataAuditFinding("fs.xattr",
+                        "атрибуты файла («Где получен», теги или комментарии Finder): " + string.Join(", ", names)));
+            }
+            else if (OperatingSystem.IsWindows())
+            {
+                var streams = Cleaning.WindowsStreams.EnumerateNamedStreams(path);
+                var zone = streams.FirstOrDefault(s => s.StartsWith(":Zone.Identifier", StringComparison.OrdinalIgnoreCase));
+                if (zone != null && File.ReadAllText(path + ":Zone.Identifier") is var text &&
+                    (text.Contains("ReferrerUrl", StringComparison.OrdinalIgnoreCase) || text.Contains("HostUrl", StringComparison.OrdinalIgnoreCase)))
+                    findings.Add(new MetadataAuditFinding("fs.zone", "адрес загрузки файла (Zone.Identifier)"));
+                var others = streams.Where(s => !s.StartsWith(":Zone.Identifier", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (others.Count > 0)
+                    findings.Add(new MetadataAuditFinding("fs.streams", "дополнительные потоки NTFS: " + string.Join(", ", others)));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DllNotFoundException or EntryPointNotFoundException) { }
+        return findings;
+    }
+
     private static MetadataAuditResult AuditOle(string path, string extension)
     {
         // Encrypted or malformed Word/Excel streams cannot be inspected; the cleaner reports them as warnings.
@@ -99,7 +139,7 @@ public static class MetadataAuditService
                 dictionary.ContainsKey(PdfName.AA) || dictionary.ContainsKey(new PdfName("AF")), "pdf.page.metadata", "метаданные страницы PDF");
         }
 
-        var xmp = document.GetXmpMetadata();
+        var xmp = document.GetXmpMetadataBytes();
         AddIf(findings, xmp is { Length: > 0 }, "pdf.xmp", "XMP-метаданные PDF");
 
         var catalog = document.GetCatalog();
@@ -154,7 +194,7 @@ public static class MetadataAuditService
 
     private static void AuditPdfObjects(PdfDocument document, ICollection<MetadataAuditFinding> findings)
     {
-        bool metadata = false, pieceInfo = false, modified = false, thumbnails = false, images = false;
+        bool metadata = false, pieceInfo = false, modified = false, thumbnails = false, images = false, associated = false, layers = false;
         for (var number = 1; number < document.GetNumberOfPdfObjects(); number++)
         {
             if (document.GetPdfObject(number) is not PdfDictionary dictionary) continue;
@@ -162,16 +202,26 @@ public static class MetadataAuditService
             pieceInfo |= dictionary.ContainsKey(Pdf.PdfCleaner.PieceInfo);
             modified |= dictionary.ContainsKey(Pdf.PdfCleaner.LastModified);
             thumbnails |= dictionary.ContainsKey(Pdf.PdfCleaner.Thumb);
+            associated |= dictionary.ContainsKey(Pdf.PdfCleaner.AssociatedFiles) || dictionary.ContainsKey(Pdf.PdfCleaner.Opi);
+            // Слой вне /OCProperties (только в ресурсах страниц и форм) тоже несёт имя.
+            layers |= PdfName.OCG.Equals(dictionary.GetAsName(PdfName.Type)) && !IsNeutralLayer(dictionary);
             if (!images && dictionary is PdfStream stream && PdfName.Image.Equals(stream.GetAsName(PdfName.Subtype)) &&
-                Pdf.PdfCleaner.GetSingleFilter(stream) is { } filter && (filter.Equals(PdfName.DCTDecode) || filter.Equals(PdfName.JPXDecode)))
-                images = Media.ImageMetadata.HasMetadata(stream.GetBytes(false));
+                Pdf.PdfCleaner.ReadEncodedImage(stream) is { } image)
+                // Нераскодируемую цепочку фильтров проверить нельзя — считаем, что метаданные могли остаться.
+                images = image.Bytes == null || Media.ImageMetadata.HasMetadata(image.Bytes);
         }
         AddIf(findings, metadata, "pdf.objects.metadata", "XMP-метаданные объектов PDF (изображений, форм, страниц)");
         AddIf(findings, pieceInfo, "pdf.objects.pieceInfo", "данные приложений PDF (PieceInfo)");
         AddIf(findings, modified, "pdf.objects.lastModified", "даты изменения объектов PDF");
         AddIf(findings, thumbnails, "pdf.objects.thumbnails", "миниатюры страниц PDF");
         AddIf(findings, images, "pdf.images", "метаданные изображений в PDF (EXIF, GPS, XMP)");
+        AddIf(findings, associated, "pdf.objects.associatedFiles", "связанные файлы (AF) или ссылки OPI в объектах PDF");
+        AddIf(findings, layers, "pdf.layers", "имена слоёв PDF и сведения о создавшем их приложении");
     }
+
+    private static bool IsNeutralLayer(PdfDictionary group) =>
+        !group.ContainsKey(Pdf.PdfCleaner.Usage) &&
+        System.Text.RegularExpressions.Regex.IsMatch(group.GetAsString(PdfName.Name)?.ToUnicodeString() ?? "", @"^Layer \d+$");
 
     private static void AuditPdfLayers(PdfDictionary catalog, ICollection<MetadataAuditFinding> findings)
     {
@@ -188,7 +238,10 @@ public static class MetadataAuditService
         var configurations = new List<PdfDictionary?> { properties.GetAsDictionary(PdfName.D) };
         var extra = properties.GetAsArray(PdfName.Configs);
         for (var i = 0; i < (extra?.Size() ?? 0); i++) configurations.Add(extra!.GetAsDictionary(i));
-        named |= configurations.OfType<PdfDictionary>().Any(c => c.ContainsKey(PdfName.Name) || c.ContainsKey(PdfName.Creator));
+        // iText 9 при записи сам добавляет конфигурациям нейтральные имена OCConfigName0, OCConfigName1, …
+        named |= configurations.OfType<PdfDictionary>().Any(c => c.ContainsKey(PdfName.Creator) ||
+            c.ContainsKey(PdfName.Name) && !System.Text.RegularExpressions.Regex.IsMatch(
+                c.GetAsString(PdfName.Name)?.ToUnicodeString() ?? c.Get(PdfName.Name)?.ToString() ?? "", @"^OCConfigName\d+$"));
         AddIf(findings, named, "pdf.layers", "имена слоёв PDF и сведения о создавшем их приложении");
     }
 

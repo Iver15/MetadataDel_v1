@@ -2,6 +2,7 @@
 #import "IntegrationManager.h"
 
 NSString *const MDBackupDefaultsKey=@"BackupEnabled";
+NSString *MDBackupsDirectory(void) { return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MetadataDel/Backups"]; }
 
 @implementation SettingsWindow
 - (NSTextField *)label:(NSString *)text size:(CGFloat)size weight:(NSFontWeight)weight secondary:(BOOL)secondary {
@@ -56,19 +57,21 @@ NSString *const MDBackupDefaultsKey=@"BackupEnabled";
     [statusText.widthAnchor constraintLessThanOrEqualToConstant:400].active=YES;
 
     self.backup=[NSButton checkboxWithTitle:@"Сохранять резервные копии" target:self action:@selector(backupClicked:)];
-    NSTextField *backupHint=[self label:@"Копия «имя.bak» появляется рядом с оригиналом. Флажок в главном окне меняет эту же настройку." size:11 weight:NSFontWeightRegular secondary:YES];
-    NSStackView *window_=[self stack:@[self.backup,backupHint] vertical:YES spacing:4];
+    NSTextField *backupHint=[self label:@"Копии оригиналов хранятся в вашей личной папке, а не рядом с документом, и не попадут в архив или письмо вместе с ним. Флажок в главном окне меняет эту же настройку." size:11 weight:NSFontWeightRegular secondary:YES];
+    NSButton *backups=[NSButton buttonWithTitle:@"Открыть папку резервных копий" target:self action:@selector(openBackups:)];
+    NSStackView *window_=[self stack:@[self.backup,backupHint,backups] vertical:YES spacing:4];
+    [window_ setCustomSpacing:8 afterView:backupHint];
     [backupHint.widthAnchor constraintEqualToAnchor:window_.widthAnchor constant:-20].active=YES;
     [backupHint setContentCompressionResistancePriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
 
-    NSTextField *logsHint=[NSTextField labelWithString:@"Журнал очистки из Finder: ~/Library/Logs/MetadataDel"];
+    NSTextField *logsHint=[NSTextField labelWithString:@"Журнал и пояснения к ошибкам: ~/Library/Logs/MetadataDel"];
     logsHint.font=[NSFont systemFontOfSize:12]; logsHint.textColor=NSColor.secondaryLabelColor; logsHint.lineBreakMode=NSLineBreakByTruncatingMiddle;
     [logsHint setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     NSButton *logs=[NSButton buttonWithTitle:@"Открыть" target:self action:@selector(openLogs:)];
     NSView *gap2=[NSView new]; [gap2 setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
     NSStackView *logRow=[self stack:@[logsHint,gap2,logs] vertical:NO spacing:8];
 
-    NSTextField *footer=[self label:@"Чтобы удалить MetadataDel, отключите правый клик и переместите приложение в Корзину. Документы и их копии не затрагиваются." size:11 weight:NSFontWeightRegular secondary:YES];
+    NSTextField *footer=[self label:@"Чтобы удалить MetadataDel, отключите правый клик и переместите приложение в Корзину. Журнал удаляется, документы и резервные копии остаются на месте." size:11 weight:NSFontWeightRegular secondary:YES];
     NSStackView *root=[self stack:@[header,[self section:@"Правый клик в Finder" content:finder],[self section:@"Главное окно" content:window_],[self section:@"Журнал" content:logRow],footer] vertical:YES spacing:18];
     [root setCustomSpacing:22 afterView:header];
     root.translatesAutoresizingMaskIntoConstraints=NO; [window.contentView addSubview:root];
@@ -109,6 +112,11 @@ NSString *const MDBackupDefaultsKey=@"BackupEnabled";
 - (void)backupClicked:(id)sender {
     BOOL on=self.backup.state==NSControlStateValueOn; [NSUserDefaults.standardUserDefaults setBool:on forKey:MDBackupDefaultsKey];
     if (self.onBackupChanged) self.onBackupChanged(on);
+}
+- (void)openBackups:(id)sender {
+    NSString *backups=MDBackupsDirectory();
+    [NSFileManager.defaultManager createDirectoryAtPath:backups withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil];
+    [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:backups isDirectory:YES]];
 }
 - (void)openLogs:(id)sender {
     NSString *logs=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/MetadataDel"];

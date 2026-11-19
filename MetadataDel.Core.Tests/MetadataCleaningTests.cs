@@ -604,11 +604,10 @@ public sealed partial class MetadataCleaningTests : IDisposable
         page.AddAnnotation(new PdfTextAnnotation(new iText.Kernel.Geom.Rectangle(20, 20, 20, 20)).SetContents("Note"));
 
         var form = PdfAcroForm.GetAcroForm(document, true);
-        var field = PdfFormField.CreateText(
-            document,
-            new iText.Kernel.Geom.Rectangle(36, 700, 120, 20),
-            "secretField",
-            "secret value");
+        var field = new TextFormFieldBuilder(document, "secretField")
+            .SetWidgetRectangle(new iText.Kernel.Geom.Rectangle(36, 700, 120, 20))
+            .CreateText();
+        field.SetValue("secret value");
         form.AddField(field, page);
     }
 

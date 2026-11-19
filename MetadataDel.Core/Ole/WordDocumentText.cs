@@ -14,6 +14,7 @@ internal static partial class WordDocumentText
     private const int ClxIndex = 33;
     private const int PlcfBteChpxIndex = 12;
     private const int FkpSize = 512;
+    private const int MaxGrpprlSize = 0x3FA2;
     private const char FieldBegin = '\u0013';
     private const char FieldSeparator = '\u0014';
     private const char FieldEnd = '\u0015';
@@ -27,7 +28,7 @@ internal static partial class WordDocumentText
     private static partial Regex QuotedLocalPath();
 
     // A local path inside binary hyperlink data: drive letter or UNC share (\\server) followed by path characters.
-    // A doubled separator after "." is our own relative padding (see RelativePath), not a share.
+    // A doubled separator after "." is our own relative padding (see OleLocalPath.RelativePath), not a share.
     [GeneratedRegex("(?:[A-Za-z]:[\\\\/]|(?<![.\\\\/])\\\\\\\\[A-Za-z0-9])[^\\x00-\\x1F\"<>|*?]{2,}")]
     private static partial Regex LocalPathInBinary();
 
@@ -116,18 +117,8 @@ internal static partial class WordDocumentText
         return found;
     }
 
-    // ".\.\.\name" of exactly the old length: a valid relative path to the same file name. A doubled separator
-    // absorbs an odd remainder; Windows and URL parsers collapse both.
-    private static string RelativePath(string name, string original, int length)
-    {
-        var separator = original.Contains('\\') ? '\\' : '/';
-        var padding = length - name.Length;
-        var prefix = string.Concat(Enumerable.Repeat("." + separator, padding / 2));
-        return padding % 2 == 1 ? prefix + separator + name : prefix + name;
-    }
-
-    // Path strings inside hyperlink monikers are length-prefixed, so they keep their length (see RelativePath).
-    private static int ScrubPaths(Span<byte> block, bool scrub)
+    // Path strings inside hyperlink monikers are length-prefixed, so they keep their length (see OleLocalPath.RelativePath).
+    internal static int ScrubPaths(Span<byte> block, bool scrub)
     {
         var found = 0;
         foreach (var (encoding, parity) in new[] { (Encoding.Latin1, 0), (Encoding.Unicode, 0), (Encoding.Unicode, 1) })
@@ -146,7 +137,7 @@ internal static partial class WordDocumentText
                 var start = match.Index;
                 if (start > 0 && text[start - 1] is '/' or '\\' && (start < 2 || text[start - 2] is not ('/' or '\\'))) start--;
                 var length = match.Index + match.Length - start;
-                encoding.GetBytes(RelativePath(name, match.Value, length)).CopyTo(region[(start * charSize)..]);
+                encoding.GetBytes(OleLocalPath.RelativePath(name, match.Value, length)).CopyTo(region[(start * charSize)..]);
             }
         }
         return found;
@@ -234,8 +225,12 @@ internal static partial class WordDocumentText
         var position = 0;
         while (position < clx.Length && clx[position] == 0x01)
         {
+            // Prc: cbGrpprl is signed but MUST be 0..0x3FA2; a negative value would never advance (or walk backwards).
             if (position + 3 > clx.Length) throw new InvalidDataException("Повреждена таблица фрагментов Word.");
-            position += 3 + BinaryPrimitives.ReadInt16LittleEndian(clx[(position + 1)..]);
+            var cbGrpprl = BinaryPrimitives.ReadInt16LittleEndian(clx[(position + 1)..]);
+            if (cbGrpprl is < 0 or > MaxGrpprlSize || position + 3 + cbGrpprl > clx.Length)
+                throw new InvalidDataException("Повреждена таблица фрагментов Word.");
+            position += 3 + cbGrpprl;
         }
         if (position + 5 > clx.Length || clx[position] != 0x02) throw new InvalidDataException("Повреждена таблица фрагментов Word.");
         var plc = clx.Slice(position + 5);
@@ -249,7 +244,7 @@ internal static partial class WordDocumentText
             var fc = BinaryPrimitives.ReadUInt32LittleEndian(plc[((count + 1) * 4 + i * 8 + 2)..]);
             var compressed = (fc & 0x40000000) != 0;
             var offset = compressed ? (long)(fc & ~0x40000000u) / 2 : fc;
-            var length = (long)(cpEnd - cpStart) * (compressed ? 1 : 2);
+            var length = ((long)cpEnd - cpStart) * (compressed ? 1 : 2);
             if (length < 0 || offset + length > wordDocument.Length) throw new InvalidDataException("Повреждена таблица фрагментов Word.");
             pieces.Add(new Piece((int)offset, (int)length, compressed));
         }

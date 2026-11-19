@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Xml;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using MetadataDel.Core.Cleaning;
@@ -10,8 +12,16 @@ internal static class WordPrivacySanitizer
 {
     private static readonly HashSet<string> RevisionWrappers = new(StringComparer.OrdinalIgnoreCase)
     {
-        "ins", "moveTo", "customXml", "smartTag"
+        "ins", "moveTo", "customXml", "smartTag", "conflictIns"
     };
+
+    // Свойства обёрток customXml/smartTag допустимы только внутри самой обёртки; после её снятия они нарушили бы схему.
+    private static readonly HashSet<string> WrapperProperties = new(StringComparer.Ordinal)
+    {
+        "customXmlPr", "smartTagPr"
+    };
+
+    private const string Bibliography = "http://schemas.openxmlformats.org/officeDocument/2006/bibliography";
 
     private static readonly HashSet<string> RevisionDeletions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -21,7 +31,9 @@ internal static class WordPrivacySanitizer
         "printerSettings",
         "commentReference", "customXmlDelRangeStart", "customXmlDelRangeEnd",
         "customXmlInsRangeStart", "customXmlInsRangeEnd", "customXmlMoveFromRangeStart",
-        "customXmlMoveFromRangeEnd", "customXmlMoveToRangeStart", "customXmlMoveToRangeEnd"
+        "customXmlMoveFromRangeEnd", "customXmlMoveToRangeStart", "customXmlMoveToRangeEnd",
+        // Метки правок таблиц и нумерации: обязательные author/date удаляются, поэтому оставлять сами метки нельзя.
+        "cellIns", "numberingChange", "tblPrExChange", "conflictDel"
     };
 
     private static readonly HashSet<string> SettingsPrivacyElements = new(StringComparer.OrdinalIgnoreCase)
@@ -30,9 +42,10 @@ internal static class WordPrivacySanitizer
         "removePersonalInformation", "removeDateAndTime", "writeReservation", "docId", "saveThroughXslt"
     };
 
+    // showingPlcHdr и placeholder не удаляются: без них текст-заполнитель («Щёлкните здесь…») стал бы содержимым документа.
     private static readonly HashSet<string> ContentControlMetadataElements = new(StringComparer.OrdinalIgnoreCase)
     {
-        "alias", "tag", "dataBinding", "placeholder", "temporary", "showingPlcHdr"
+        "alias", "tag", "dataBinding", "temporary"
     };
 
     public static void Sanitize(WordprocessingDocument document, OpenXmlSanitizeContext context)
@@ -44,75 +57,71 @@ internal static class WordPrivacySanitizer
             return;
         }
 
-        DeleteCustomXmlParts(mainPart);
-        if (mainPart.WordprocessingCommentsPart != null)
+        // Глоссарий (стандартные блоки) — отдельный документ со своими настройками, колонтитулами и сносками.
+        foreach (var scope in EnumerateDocumentScopes(mainPart))
         {
-            mainPart.DeletePart(mainPart.WordprocessingCommentsPart);
+            SanitizeDocumentScope(scope, context);
         }
 
-        if (mainPart.WordprocessingCommentsExPart != null)
+        OpenXmlPackageSanitizer.Sanitize(document, context);
+    }
+
+    private static void SanitizeDocumentScope(OpenXmlPart scope, OpenXmlSanitizeContext context)
+    {
+        DeleteCustomXmlParts(scope, context);
+        foreach (var part in scope.GetPartsOfType<WordprocessingCommentsPart>().Cast<OpenXmlPart>()
+                     .Concat(scope.GetPartsOfType<WordprocessingCommentsExPart>())
+                     .Concat(scope.GetPartsOfType<WordprocessingPeoplePart>())
+                     .Concat(scope.GetPartsOfType<WordCommentsExtensiblePart>())
+                     .Concat(scope.GetPartsOfType<WordprocessingCommentsIdsPart>())
+                     .Concat(scope.GetPartsOfType<WordprocessingPrinterSettingsPart>())
+                     .ToList())
         {
-            mainPart.DeletePart(mainPart.WordprocessingCommentsExPart);
+            scope.DeletePart(part);
         }
 
-        if (mainPart.WordprocessingPeoplePart != null)
+        foreach (var settings in scope.GetPartsOfType<DocumentSettingsPart>().ToList())
         {
-            mainPart.DeletePart(mainPart.WordprocessingPeoplePart);
-        }
+            if (settings.MailMergeRecipientDataPart != null)
+            {
+                settings.DeletePart(settings.MailMergeRecipientDataPart);
+            }
 
-        if (mainPart.WordCommentsExtensiblePart != null)
-        {
-            mainPart.DeletePart(mainPart.WordCommentsExtensiblePart);
-        }
-
-        if (mainPart.WordprocessingCommentsIdsPart != null)
-        {
-            mainPart.DeletePart(mainPart.WordprocessingCommentsIdsPart);
-        }
-
-        foreach (var printerSettings in mainPart.WordprocessingPrinterSettingsParts.ToList())
-        {
-            mainPart.DeletePart(printerSettings);
-        }
-
-        if (mainPart.DocumentSettingsPart?.MailMergeRecipientDataPart != null)
-        {
-            mainPart.DocumentSettingsPart.DeletePart(mainPart.DocumentSettingsPart.MailMergeRecipientDataPart);
-        }
-
-        if (mainPart.DocumentSettingsPart != null)
-        {
-            OpenXmlPartXml.Update(mainPart.DocumentSettingsPart, SanitizeSettingsXml);
+            OpenXmlPartXml.Update(settings, SanitizeSettingsXml);
 
             // Ссылки на шаблон и источники слияния после удаления элементов не нужны, но хранят локальные пути.
-            foreach (var relationship in mainPart.DocumentSettingsPart.ExternalRelationships.ToList())
+            foreach (var relationship in settings.ExternalRelationships.ToList())
             {
-                mainPart.DocumentSettingsPart.DeleteExternalRelationship(relationship);
+                settings.DeleteExternalRelationship(relationship);
             }
         }
 
-        foreach (var part in EnumerateSanitizedParts(mainPart))
+        foreach (var part in EnumerateSanitizedParts(scope))
         {
             OpenXmlPartXml.Update(part, SanitizePartXml);
         }
 
-        var hiddenStyles = WordHiddenContent.LoadHiddenStyles(mainPart.StyleDefinitionsPart);
+        var hiddenStyles = WordHiddenContent.LoadStyleVisibility(scope.GetPartsOfType<StyleDefinitionsPart>().FirstOrDefault());
         var removedHiddenRuns = 0;
-        foreach (var part in WordHiddenContent.EnumerateContentParts(mainPart))
+        foreach (var part in WordHiddenContent.EnumerateContentParts(scope).ToList())
         {
+            var removedInPart = 0;
             OpenXmlPartXml.Update(part, xml =>
             {
-                var removed = WordHiddenContent.RemoveHiddenRuns(xml, hiddenStyles, out var count);
-                removedHiddenRuns += count;
+                var removed = WordHiddenContent.RemoveHiddenRuns(xml, hiddenStyles, out removedInPart);
                 return WordHiddenContent.RewriteFieldPaths(xml) | removed;
             });
+            removedHiddenRuns += removedInPart;
+            if (removedInPart > 0)
+            {
+                // Картинки и объекты удалённого скрытого текста не должны оставаться в пакете.
+                WordHiddenContent.DeleteUnreferencedMedia(part);
+            }
         }
         if (removedHiddenRuns > 0)
         {
             context.Warn("Удалён скрытый текст Word.");
         }
-
-        OpenXmlPackageSanitizer.Sanitize(document, context);
     }
 
     internal static bool HasResidualMetadata(WordprocessingDocument document, IList<string> findings)
@@ -131,43 +140,61 @@ internal static class WordPrivacySanitizer
             return findings.Count > 0;
         }
 
-        if (mainPart.WordprocessingCommentsPart != null ||
-            mainPart.WordprocessingCommentsExPart != null ||
-            mainPart.WordprocessingPeoplePart != null ||
-            mainPart.WordCommentsExtensiblePart != null ||
-            mainPart.WordprocessingCommentsIdsPart != null)
+        foreach (var scope in EnumerateDocumentScopes(mainPart))
         {
-            findings.Add("комментарии или авторы комментариев");
+            AuditDocumentScope(scope, findings);
         }
 
-        if (mainPart.CustomXmlParts.Any())
+        return findings.Count > 0;
+    }
+
+    private static void AuditDocumentScope(OpenXmlPart scope, IList<string> findings)
+    {
+        void Add(string finding)
         {
-            findings.Add("custom XML");
+            if (!findings.Contains(finding)) findings.Add(finding);
         }
 
-        if (mainPart.DocumentSettingsPart?.MailMergeRecipientDataPart != null)
+        if (scope.GetPartsOfType<WordprocessingCommentsPart>().Any() ||
+            scope.GetPartsOfType<WordprocessingCommentsExPart>().Any() ||
+            scope.GetPartsOfType<WordprocessingPeoplePart>().Any() ||
+            scope.GetPartsOfType<WordCommentsExtensiblePart>().Any() ||
+            scope.GetPartsOfType<WordprocessingCommentsIdsPart>().Any())
         {
-            findings.Add("данные mail merge");
+            Add("комментарии или авторы комментариев");
         }
 
-        if (mainPart.DocumentSettingsPart?.ExternalRelationships.Any() == true)
+        if (scope.GetPartsOfType<CustomXmlPart>().Any())
         {
-            findings.Add("ссылка на шаблон или источник слияния");
+            Add("custom XML");
         }
 
-        if (mainPart.WordprocessingPrinterSettingsParts.Any())
+        foreach (var settings in scope.GetPartsOfType<DocumentSettingsPart>())
         {
-            findings.Add("настройки принтера");
+            if (settings.MailMergeRecipientDataPart != null)
+            {
+                Add("данные mail merge");
+            }
+
+            if (settings.ExternalRelationships.Any())
+            {
+                Add("ссылка на шаблон или источник слияния");
+            }
+
+            var settingsXml = OpenXmlPartXml.TryLoad(settings);
+            if (settingsXml != null &&
+                settingsXml.Descendants().Any(e => SettingsPrivacyElements.Contains(e.Name.LocalName)))
+            {
+                Add("служебные настройки Word");
+            }
         }
 
-        var settingsXml = mainPart.DocumentSettingsPart is null ? null : OpenXmlPartXml.TryLoad(mainPart.DocumentSettingsPart);
-        if (settingsXml != null &&
-            settingsXml.Descendants().Any(e => SettingsPrivacyElements.Contains(e.Name.LocalName)))
+        if (scope.GetPartsOfType<WordprocessingPrinterSettingsPart>().Any())
         {
-            findings.Add("служебные настройки Word");
+            Add("настройки принтера");
         }
 
-        foreach (var part in EnumerateSanitizedParts(mainPart))
+        foreach (var part in EnumerateSanitizedParts(scope))
         {
             var documentXml = OpenXmlPartXml.TryLoad(part);
             if (documentXml == null)
@@ -175,15 +202,21 @@ internal static class WordPrivacySanitizer
                 continue;
             }
 
-            if (documentXml.Descendants().Any(e => RevisionWrappers.Contains(e.Name.LocalName) || RevisionDeletions.Contains(e.Name.LocalName)))
+            if (documentXml.Descendants().Any(e => RevisionWrappers.Contains(e.Name.LocalName) || RevisionDeletions.Contains(e.Name.LocalName) ||
+                                                   e.Name.LocalName is "cellDel" or "cellMerge"))
             {
-                findings.Add("следы правок или комментариев");
-                break;
+                Add("следы правок или комментариев");
+            }
+
+            if (EnumerateElementsAndSelf(documentXml).Attributes().Any(IsPrivacyAttribute) ||
+                documentXml.Descendants().Any(IsRsidElement))
+            {
+                Add("атрибуты редактора/сессии");
             }
         }
 
-        var hiddenStyles = WordHiddenContent.LoadHiddenStyles(mainPart.StyleDefinitionsPart);
-        foreach (var part in WordHiddenContent.EnumerateContentParts(mainPart))
+        var hiddenStyles = WordHiddenContent.LoadStyleVisibility(scope.GetPartsOfType<StyleDefinitionsPart>().FirstOrDefault());
+        foreach (var part in WordHiddenContent.EnumerateContentParts(scope))
         {
             var documentXml = OpenXmlPartXml.TryLoad(part);
             if (documentXml == null)
@@ -193,79 +226,38 @@ internal static class WordPrivacySanitizer
 
             if (WordHiddenContent.FindHiddenRuns(documentXml, hiddenStyles).Count > 0)
             {
-                findings.Add("скрытый текст");
+                Add("скрытый текст");
             }
 
             if (WordHiddenContent.HasLocalFieldPaths(documentXml))
             {
-                findings.Add("локальные пути в кодах полей");
+                Add("локальные пути в кодах полей");
             }
         }
-
-        foreach (var part in EnumerateSanitizedParts(mainPart))
-        {
-            var documentXml = OpenXmlPartXml.TryLoad(part);
-            if (documentXml == null)
-            {
-                continue;
-            }
-
-            if (EnumerateElementsAndSelf(documentXml).Attributes().Any(IsPrivacyAttribute))
-            {
-                findings.Add("атрибуты редактора/сессии");
-                break;
-            }
-        }
-
-        return findings.Count > 0;
     }
 
-    private static IEnumerable<OpenXmlPart> EnumerateSanitizedParts(MainDocumentPart mainPart)
+    /// <summary>Основной документ и, если есть, документ глоссария (стандартные блоки).</summary>
+    private static IEnumerable<OpenXmlPart> EnumerateDocumentScopes(MainDocumentPart mainPart)
     {
         yield return mainPart;
-
-        foreach (var headerPart in mainPart.HeaderParts)
+        if (mainPart.GlossaryDocumentPart != null)
         {
-            yield return headerPart;
+            yield return mainPart.GlossaryDocumentPart;
         }
+    }
 
-        foreach (var footerPart in mainPart.FooterParts)
-        {
-            yield return footerPart;
-        }
+    private static IEnumerable<OpenXmlPart> EnumerateSanitizedParts(OpenXmlPart scope)
+    {
+        yield return scope;
 
-        if (mainPart.FootnotesPart != null)
-        {
-            yield return mainPart.FootnotesPart;
-        }
-
-        if (mainPart.EndnotesPart != null)
-        {
-            yield return mainPart.EndnotesPart;
-        }
-
-        if (mainPart.StyleDefinitionsPart != null)
-        {
-            yield return mainPart.StyleDefinitionsPart;
-        }
-
-        if (mainPart.StylesWithEffectsPart != null)
-        {
-            yield return mainPart.StylesWithEffectsPart;
-        }
-
-        if (mainPart.NumberingDefinitionsPart != null)
-        {
-            yield return mainPart.NumberingDefinitionsPart;
-        }
-
-        var glossary = mainPart.GlossaryDocumentPart;
-        if (glossary != null)
-        {
-            yield return glossary;
-            if (glossary.StyleDefinitionsPart != null) yield return glossary.StyleDefinitionsPart;
-            if (glossary.NumberingDefinitionsPart != null) yield return glossary.NumberingDefinitionsPart;
-        }
+        foreach (var part in scope.GetPartsOfType<HeaderPart>()) yield return part;
+        foreach (var part in scope.GetPartsOfType<FooterPart>()) yield return part;
+        foreach (var part in scope.GetPartsOfType<FootnotesPart>()) yield return part;
+        foreach (var part in scope.GetPartsOfType<EndnotesPart>()) yield return part;
+        foreach (var part in scope.GetPartsOfType<StyleDefinitionsPart>()) yield return part;
+        foreach (var part in scope.GetPartsOfType<StylesWithEffectsPart>()) yield return part;
+        foreach (var part in scope.GetPartsOfType<NumberingDefinitionsPart>()) yield return part;
+        foreach (var part in scope.GetPartsOfType<WebSettingsPart>()) yield return part;
     }
 
     private static bool SanitizePartXml(XDocument document)
@@ -298,6 +290,9 @@ internal static class WordPrivacySanitizer
             changed = true;
         }
 
+        changed |= AcceptParagraphMarkDeletions(document);
+        changed |= AcceptTableRevisions(document);
+
         foreach (var element in document.Descendants().Where(e => RevisionDeletions.Contains(e.Name.LocalName)).ToList())
         {
             element.Remove();
@@ -306,12 +301,199 @@ internal static class WordPrivacySanitizer
 
         foreach (var element in document.Descendants().Where(e => RevisionWrappers.Contains(e.Name.LocalName)).Reverse().ToList())
         {
+            element.Elements().Where(e => WrapperProperties.Contains(e.Name.LocalName)).Remove();
             element.ReplaceWith(element.Nodes());
+            changed = true;
+        }
+
+        foreach (var element in document.Descendants().Where(IsRsidElement).ToList())
+        {
+            element.Remove();
+            changed = true;
+        }
+
+        changed |= ReplaceListIdentifiers(document);
+
+        return changed;
+    }
+
+    // Разметка диапазонов между абзацами не мешает слиянию: следующим абзацем считается первый абзац после неё.
+    private static readonly HashSet<string> RangeMarkup = new(StringComparer.Ordinal)
+    {
+        "bookmarkStart", "bookmarkEnd", "permStart", "permEnd", "proofErr", "commentRangeStart", "commentRangeEnd",
+        "moveFromRangeStart", "moveFromRangeEnd", "moveToRangeStart", "moveToRangeEnd",
+        "customXmlDelRangeStart", "customXmlDelRangeEnd", "customXmlInsRangeStart", "customXmlInsRangeEnd",
+        "customXmlMoveFromRangeStart", "customXmlMoveFromRangeEnd", "customXmlMoveToRangeStart", "customXmlMoveToRangeEnd"
+    };
+
+    /// <summary>
+    /// Принимает удаление знака абзаца (w:pPr/w:rPr/w:del или w:moveFrom), как «Принять все» в Word: оставшееся
+    /// содержимое абзаца переносится в начало следующего абзаца, который сохраняет свои свойства, а сам абзац удаляется.
+    /// Если дальше не абзац (таблица, конец контейнера), пустой абзац удаляется, а непустой остаётся без метки.
+    /// Абзац с разрывом раздела (w:sectPr) не удаляется никогда. Сами метки удаляются вместе с прочими следами правок.
+    /// </summary>
+    private static bool AcceptParagraphMarkDeletions(XDocument document)
+    {
+        var changed = false;
+        // Порядок документа: в цепочке удалённых знаков содержимое каждого абзаца накапливается в следующем.
+        foreach (var paragraph in document.Descendants().Where(IsParagraphWithDeletedMark).ToList())
+        {
+            if (paragraph.Parent == null) continue;
+            var properties = paragraph.Elements().FirstOrDefault(e => e.Name.LocalName == "pPr");
+            if (properties?.Elements().Any(e => e.Name.LocalName == "sectPr") == true) continue;
+
+            var next = NextBlock(paragraph);
+            if (next != null && next.Name == paragraph.Name)
+            {
+                var content = paragraph.Nodes().Where(n => n is not XElement { Name.LocalName: "pPr" }).ToList();
+                foreach (var node in content) node.Remove();
+                var nextProperties = next.Elements().FirstOrDefault(e => e.Name.LocalName == "pPr");
+                if (nextProperties != null) nextProperties.AddAfterSelf(content);
+                else next.AddFirst(content);
+                paragraph.Remove();
+                changed = true;
+                continue;
+            }
+
+            // Пустой абзац удаляется, только если контейнер по-прежнему заканчивается абзацем (этого требует Word).
+            var previous = PreviousBlock(paragraph);
+            if (!HasRemainingContent(paragraph) && (next != null || previous?.Name == paragraph.Name))
+            {
+                paragraph.Remove();
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private static bool IsParagraphWithDeletedMark(XElement element) =>
+        element.Name.LocalName == "p" &&
+        element.Elements().FirstOrDefault(e => e.Name.LocalName == "pPr")?
+            .Elements().FirstOrDefault(e => e.Name.LocalName == "rPr")?
+            .Elements().Any(e => e.Name.LocalName is "del" or "moveFrom") == true;
+
+    private static XElement? NextBlock(XElement element) =>
+        element.ElementsAfterSelf().FirstOrDefault(e => !RangeMarkup.Contains(e.Name.LocalName));
+
+    private static XElement? PreviousBlock(XElement element) =>
+        element.ElementsBeforeSelf().LastOrDefault(e => !RangeMarkup.Contains(e.Name.LocalName));
+
+    /// <summary>Остаётся ли в абзаце что-то кроме свойств, разметки диапазонов и удаляемых следов правок.</summary>
+    private static bool HasRemainingContent(XElement paragraph) =>
+        paragraph.Elements().Any(e =>
+            e.Name.LocalName != "pPr" && !RangeMarkup.Contains(e.Name.LocalName) && !RevisionDeletions.Contains(e.Name.LocalName) &&
+            !(e.Name.LocalName == "r" && e.Elements().All(c => c.Name.LocalName == "rPr" || RevisionDeletions.Contains(c.Name.LocalName))));
+
+    /// <summary>
+    /// Принимает исправления структуры таблиц: удалённые ячейки и строки удаляются вместе с содержимым
+    /// (как при «Принять все»), изменённое вертикальное объединение ячеек применяется.
+    /// </summary>
+    private static bool AcceptTableRevisions(XDocument document)
+    {
+        var changed = false;
+        var tables = new HashSet<XElement>();
+
+        foreach (var marker in document.Descendants().Where(e => e.Name.LocalName == "cellDel" && e.Parent?.Name.LocalName == "tcPr").ToList())
+        {
+            var cell = marker.Parent!.Parent;
+            if (cell?.Name.LocalName != "tc" || cell.Parent == null) continue;
+            var row = cell.Ancestors().FirstOrDefault(e => e.Name.LocalName == "tr");
+            cell.Remove();
+            changed = true;
+            if (row != null && row.Parent != null && !row.Descendants().Any(e => e.Name.LocalName == "tc"))
+            {
+                var table = row.Ancestors().FirstOrDefault(e => e.Name.LocalName == "tbl");
+                row.Remove();
+                if (table != null) tables.Add(table);
+            }
+        }
+
+        foreach (var marker in document.Descendants().Where(e => e.Name.LocalName == "del" && e.Parent?.Name.LocalName == "trPr").ToList())
+        {
+            var row = marker.Parent!.Parent;
+            if (row?.Name.LocalName != "tr" || row.Parent == null) continue;
+            var table = row.Ancestors().FirstOrDefault(e => e.Name.LocalName == "tbl");
+            row.Remove();
+            changed = true;
+            if (table != null) tables.Add(table);
+        }
+
+        // Таблица без строк недопустима: на её месте остаётся пустой абзац (он нужен и тогда, когда таблица была последней в ячейке).
+        foreach (var table in tables.Where(t => t.Parent != null && !t.Descendants().Any(e => e.Name.LocalName == "tr")).ToList())
+        {
+            table.ReplaceWith(new XElement(table.Name.Namespace + "p"));
+        }
+
+        foreach (var marker in document.Descendants().Where(e => e.Name.LocalName == "cellMerge").ToList())
+        {
+            if (marker.Parent?.Name.LocalName == "tcPr")
+            {
+                ApplyVerticalMerge(marker.Parent, marker);
+            }
+            marker.Remove();
             changed = true;
         }
 
         return changed;
     }
+
+    /// <summary>Принимает изменение вертикального объединения: значение vMerge из метки становится текущим.</summary>
+    private static void ApplyVerticalMerge(XElement properties, XElement marker)
+    {
+        var w = marker.Name.Namespace;
+        var revised = marker.Attributes().FirstOrDefault(a => a.Name.LocalName == "vMerge")?.Value;
+        var merge = properties.Elements().FirstOrDefault(e => e.Name.LocalName == "vMerge");
+        if (revised is not ("rest" or "cont"))
+        {
+            merge?.Remove();
+            return;
+        }
+
+        if (merge == null)
+        {
+            merge = new XElement(w + "vMerge");
+            var previous = properties.Elements().LastOrDefault(e => e.Name.LocalName is "cnfStyle" or "tcW" or "gridSpan" or "hMerge");
+            if (previous != null) previous.AddAfterSelf(merge);
+            else properties.AddFirst(merge);
+        }
+        merge.Attributes().Where(a => a.Name.LocalName == "val").Remove();
+        if (revised == "rest") merge.SetAttributeValue(w + "val", "restart");
+    }
+
+    /// <summary>
+    /// nsid и tmpl списков — случайные числа, одинаковые во всех копиях документа. Удалять их нельзя (nsid связывает
+    /// продолжение списка), поэтому они заменяются значениями, вычисленными из номера определения списка.
+    /// </summary>
+    private static bool ReplaceListIdentifiers(XDocument document)
+    {
+        var changed = false;
+        var index = 0u;
+        foreach (var definition in document.Descendants().Where(e => e.Name.LocalName == "abstractNum"))
+        {
+            var idText = definition.Attributes().FirstOrDefault(a => a.Name.LocalName == "abstractNumId")?.Value;
+            var id = uint.TryParse(idText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : index;
+            index++;
+            // Умножение на нечётную константу — биекция на uint, поэтому разные номера дают разные nsid.
+            var mixed = unchecked(id * 2654435761u);
+            changed |= SetHexValue(definition, "nsid", mixed ^ 0x4D444C31u);
+            changed |= SetHexValue(definition, "tmpl", mixed ^ 0x4D444C32u);
+        }
+        return changed;
+    }
+
+    private static bool SetHexValue(XElement definition, string localName, uint value)
+    {
+        var element = definition.Elements().FirstOrDefault(e => e.Name.LocalName == localName);
+        var attribute = element?.Attributes().FirstOrDefault(a => a.Name.LocalName == "val");
+        var text = value.ToString("X8", CultureInfo.InvariantCulture);
+        if (attribute == null || attribute.Value == text) return false;
+        attribute.Value = text;
+        return true;
+    }
+
+    /// <summary>Элемент w:rsid (например, в определении стиля); список w:rsids в настройках удаляется целиком.</summary>
+    private static bool IsRsidElement(XElement element) =>
+        element.Name.LocalName == "rsid" && element.Parent?.Name.LocalName != "rsids";
 
     private static bool SanitizeSettingsXml(XDocument document)
     {
@@ -333,14 +515,36 @@ internal static class WordPrivacySanitizer
     }
 
     private static bool IsPrivacyAttribute(XAttribute attribute) =>
-        attribute.Name.LocalName.StartsWith("rsid", StringComparison.OrdinalIgnoreCase) ||
-        attribute.Name.LocalName is "author" or "date" or "initials" or "paraId" or "textId";
+        !attribute.IsNamespaceDeclaration &&
+        (attribute.Name.LocalName.StartsWith("rsid", StringComparison.OrdinalIgnoreCase) ||
+         attribute.Name.LocalName is "author" or "date" or "initials" or "paraId" or "textId" or "dateUtc" or "durableId");
 
-    private static void DeleteCustomXmlParts(MainDocumentPart mainPart)
+    private static void DeleteCustomXmlParts(OpenXmlPart scope, OpenXmlSanitizeContext context)
     {
-        foreach (var part in mainPart.CustomXmlParts.ToList())
+        foreach (var part in scope.GetPartsOfType<CustomXmlPart>().ToList())
         {
-            mainPart.DeletePart(part);
+            WarnIfBibliography(part, context);
+            scope.DeletePart(part);
+        }
+    }
+
+    /// <summary>Список источников Word хранится в custom XML; его удаление меняет поведение документа, об этом нужно сказать.</summary>
+    internal static void WarnIfBibliography(OpenXmlPart part, OpenXmlSanitizeContext context)
+    {
+        XDocument? xml;
+        try
+        {
+            xml = OpenXmlPartXml.TryLoad(part);
+        }
+        catch (XmlException)
+        {
+            return;
+        }
+
+        if (xml?.Root?.Name.NamespaceName == Bibliography)
+        {
+            context.Warn("Удалён список источников Word (библиография): в нём хранятся авторы и названия цитируемых работ. " +
+                         "Ссылки и список литературы в тексте сохранены, но обновить их из списка источников больше нельзя.");
         }
     }
 

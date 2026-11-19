@@ -8,7 +8,7 @@ DOTNET_BIN="${DOTNET_BIN:-$HOME/.dotnet/dotnet}"
 if [[ ! -x "$DOTNET_BIN" ]]; then
   echo "dotnet not found at $DOTNET_BIN" >&2
   echo "Install the full .NET 8 SDK first, for example:" >&2
-  echo "  curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 8.0 --install-dir ~/.dotnet" >&2
+  echo "  curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 10.0 --install-dir ~/.dotnet" >&2
   exit 1
 fi
 

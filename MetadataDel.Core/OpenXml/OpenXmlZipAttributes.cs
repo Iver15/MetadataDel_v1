@@ -4,55 +4,101 @@ using System.Xml.Linq;
 
 namespace MetadataDel.Core.OpenXml;
 
+/// <summary>
+/// Пересобирает ZIP-контейнер OpenXML-пакета в новый архив: стабильный порядок записей, одинаковое время,
+/// без комментариев архива и записей и без дополнительных полей (NTFS/UT-время, данные архиваторов).
+/// Имена и содержимое записей сохраняются точно; лишние записи без ссылок удаляются.
+/// </summary>
 internal static class OpenXmlZipAttributes
 {
-    private const int UnixModeMask = unchecked((int)0xFFFF0000);
-    private const int LowerAttributesMask = 0x0000FFFF;
     private const int RegularFileMode = unchecked((int)0x81A40000); // 0100644 << 16
-    private const int DirectoryMode = 0x41ED0000; // 040755 << 16
+    private const int DirectoryMode = 0x41ED0000 | 0x10; // 040755 << 16 и атрибут каталога MS-DOS
     private static readonly DateTimeOffset SanitizedLastWriteTime = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+    private const string ContentTypesName = "[Content_Types].xml";
+    private const string PackageRelationshipsName = "_rels/.rels";
 
     public static void Normalize(string path)
     {
-        using var archive = ZipFile.Open(path, ZipArchiveMode.Update);
-        Normalize(archive);
+        var temporary = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, "." + Guid.NewGuid().ToString("N") + ".mdel-zip");
+        try
+        {
+            using (var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var target = new FileStream(temporary, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+                Rewrite(source, target);
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
     }
 
     public static void Normalize(Stream stream)
     {
+        using var source = new MemoryStream();
         stream.Position = 0;
-        using var archive = new ZipArchive(stream, ZipArchiveMode.Update, leaveOpen: true);
-        Normalize(archive);
+        stream.CopyTo(source);
+        source.Position = 0;
+        stream.Position = 0;
+        stream.SetLength(0);
+        Rewrite(source, stream);
+        stream.Position = 0;
     }
 
-    private static void Normalize(ZipArchive archive)
+    private static void Rewrite(Stream source, Stream target)
     {
-        RemoveUnreferencedParts(archive);
-        foreach (var entry in archive.Entries)
+        using var input = new ZipArchive(source, ZipArchiveMode.Read, leaveOpen: true);
+        var entries = input.Entries.ToList();
+        var removed = FindUnreferencedEntries(entries);
+        var contentTypes = removed.Count == 0 ? null : RewriteContentTypes(entries, removed);
+
+        // [Content_Types].xml и _rels/.rels — первыми, как их записывает Office; остальное — в порядке имён.
+        var kept = entries.Where(e => !removed.Contains(e))
+            .Select((entry, index) => (Entry: entry, Index: index))
+            .OrderBy(e => Rank(e.Entry.FullName))
+            .ThenBy(e => e.Entry.FullName, StringComparer.Ordinal)
+            .ThenBy(e => e.Index)
+            .Select(e => e.Entry)
+            .ToList();
+
+        using var output = new ZipArchive(target, ZipArchiveMode.Create, leaveOpen: true);
+        foreach (var entry in kept)
         {
-            entry.LastWriteTime = SanitizedLastWriteTime;
-
-            if ((entry.ExternalAttributes & UnixModeMask) == 0)
+            var directory = entry.FullName.EndsWith("/", StringComparison.Ordinal);
+            var created = output.CreateEntry(entry.FullName, directory ? CompressionLevel.NoCompression : CompressionLevel.Optimal);
+            created.LastWriteTime = SanitizedLastWriteTime;
+            created.ExternalAttributes = directory ? DirectoryMode : RegularFileMode;
+            using var destination = created.Open();
+            if (directory) continue;
+            if (contentTypes != null && IsContentTypes(entry.FullName))
             {
-                var mode = entry.FullName.EndsWith("/", StringComparison.Ordinal)
-                    ? DirectoryMode
-                    : RegularFileMode;
-
-                entry.ExternalAttributes = (entry.ExternalAttributes & LowerAttributesMask) | mode;
+                destination.Write(contentTypes);
+                continue;
             }
+            using var data = entry.Open();
+            data.CopyTo(destination);
         }
     }
 
+    private static int Rank(string name) =>
+        IsContentTypes(name) ? 0 :
+        string.Equals(name, PackageRelationshipsName, StringComparison.OrdinalIgnoreCase) ? 1 : 2;
+
+    private static bool IsContentTypes(string name) => string.Equals(name, ContentTypesName, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
-    /// Удаляет записи архива, на которые не ведёт ни одна связь: SDK их не видит и сохраняет как есть,
+    /// Записи архива, на которые не ведёт ни одна связь: SDK их не видит и сохраняет как есть,
     /// а в них бывают старые миниатюры, свойства и «[trash]» прежних версий Office.
+    /// Имена сравниваются точно и в раскодированном виде (%20 и т. п.), но сами записи не переименовываются.
     /// </summary>
-    private static void RemoveUnreferencedParts(ZipArchive archive)
+    private static HashSet<ZipArchiveEntry> FindUnreferencedEntries(List<ZipArchiveEntry> entries)
     {
-        var entries = archive.Entries.Where(e => !e.FullName.EndsWith("/", StringComparison.Ordinal))
-            .GroupBy(e => Uri.UnescapeDataString(e.FullName), StringComparer.OrdinalIgnoreCase)
+        var none = new HashSet<ZipArchiveEntry>();
+        var files = entries.Where(e => !e.FullName.EndsWith("/", StringComparison.Ordinal))
+            .GroupBy(e => e.FullName, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
-        if (!entries.ContainsKey(ContentTypesName) || !entries.ContainsKey("_rels/.rels")) return;
+        if (!files.ContainsKey(ContentTypesName) || !files.ContainsKey(PackageRelationshipsName)) return none;
 
         var reachable = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ContentTypesName };
         var pending = new Queue<string>();
@@ -62,9 +108,9 @@ internal static class OpenXmlZipAttributes
             var source = pending.Dequeue();
             var directory = source.Contains('/') ? source[..source.LastIndexOf('/')] : "";
             var relationships = source.Length == 0
-                ? "_rels/.rels"
+                ? PackageRelationshipsName
                 : (directory.Length == 0 ? "" : directory + "/") + "_rels/" + source[(source.LastIndexOf('/') + 1)..] + ".rels";
-            if (!entries.TryGetValue(relationships, out var relationshipEntries)) continue;
+            if (!files.TryGetValue(relationships, out var relationshipEntries)) continue;
             reachable.Add(relationships);
 
             XDocument document;
@@ -76,7 +122,7 @@ internal static class OpenXmlZipAttributes
             catch (XmlException)
             {
                 // Нечитаемые связи: не угадываем, что используется, и ничего не удаляем.
-                return;
+                return none;
             }
 
             foreach (var relationship in document.Root?.Elements() ?? Enumerable.Empty<XElement>())
@@ -84,30 +130,62 @@ internal static class OpenXmlZipAttributes
                 if ((string?)relationship.Attribute("TargetMode") == "External") continue;
                 var target = (string?)relationship.Attribute("Target");
                 if (string.IsNullOrEmpty(target)) continue;
-                var resolved = Resolve(directory, Uri.UnescapeDataString(target.Split('#')[0]));
-                if (resolved != null && entries.ContainsKey(resolved) && reachable.Add(resolved))
-                    pending.Enqueue(resolved);
+                target = target.Split('#')[0];
+                foreach (var candidate in new[] { Resolve(directory, target), Resolve(directory, Uri.UnescapeDataString(target)) })
+                {
+                    if (candidate != null && files.ContainsKey(candidate) && reachable.Add(candidate))
+                        pending.Enqueue(files[candidate][0].FullName);
+                }
             }
         }
 
-        var removed = entries.Where(e => !reachable.Contains(e.Key)).ToList();
-        if (removed.Count == 0) return;
-        foreach (var entry in removed.SelectMany(e => e.Value))
-            entry.Delete();
-
-        var contentTypes = entries[ContentTypesName][0];
-        XDocument types;
-        using (var stream = contentTypes.Open())
-            types = XDocument.Load(stream);
-        var removedNames = removed.Select(e => "/" + e.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        types.Root?.Elements().Where(e => e.Name.LocalName == "Override" &&
-            removedNames.Contains(Uri.UnescapeDataString((string?)e.Attribute("PartName") ?? ""))).Remove();
-        contentTypes.Delete();
-        using var output = archive.CreateEntry(ContentTypesName, CompressionLevel.Optimal).Open();
-        types.Save(output, SaveOptions.DisableFormatting);
+        return files.Where(f => !reachable.Contains(f.Key)).SelectMany(f => f.Value).ToHashSet();
     }
 
-    private const string ContentTypesName = "[Content_Types].xml";
+    /// <summary>[Content_Types].xml без Override для удалённых записей; null — если его не удалось прочитать.</summary>
+    private static byte[]? RewriteContentTypes(List<ZipArchiveEntry> entries, HashSet<ZipArchiveEntry> removed)
+    {
+        var contentTypes = entries.FirstOrDefault(e => IsContentTypes(e.FullName));
+        if (contentTypes == null) return null;
+
+        XDocument types;
+        try
+        {
+            using var stream = contentTypes.Open();
+            types = XDocument.Load(stream, LoadOptions.PreserveWhitespace);
+        }
+        catch (XmlException)
+        {
+            return null;
+        }
+
+        var keptNames = Names(entries.Where(e => !removed.Contains(e)));
+        var removedNames = Names(removed);
+        var overrides = types.Root?.Elements().Where(e => e.Name.LocalName == "Override").Where(e =>
+        {
+            var partName = ((string?)e.Attribute("PartName") ?? "").TrimStart('/');
+            var unescaped = Uri.UnescapeDataString(partName);
+            return (removedNames.Contains(partName) || removedNames.Contains(unescaped)) &&
+                   !keptNames.Contains(partName) && !keptNames.Contains(unescaped);
+        }).ToList();
+        if (overrides == null || overrides.Count == 0) return null;
+        overrides.Remove();
+
+        using var output = new MemoryStream();
+        types.Save(output, SaveOptions.DisableFormatting);
+        return output.ToArray();
+    }
+
+    private static HashSet<string> Names(IEnumerable<ZipArchiveEntry> entries)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries)
+        {
+            names.Add(entry.FullName);
+            names.Add(Uri.UnescapeDataString(entry.FullName));
+        }
+        return names;
+    }
 
     private static string? Resolve(string directory, string target)
     {

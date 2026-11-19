@@ -132,3 +132,6 @@ _ReSharper*/
 
 # Generic cache folders
 .cache/
+
+# Рабочие копии агентов Claude Code
+.claude/worktrees/

@@ -32,17 +32,23 @@ public sealed class DesktopTests : IDisposable
     {
         var path = Document();
         var original = File.ReadAllBytes(path);
+        using var profile = AppDataPaths.OverrideRootForTests(Path.Combine(dir, "profile"));
         using var output = new StringWriter();
         Assert.Equal(0, await GuiCleanCommand.RunAsync(["--gui-clean", "--backup=on", "--", path], output, TextWriter.Null));
         using var json = JsonDocument.Parse(output.ToString());
         Assert.True(json.RootElement.GetProperty("success").GetBoolean());
+        Assert.False(json.RootElement.GetProperty("incomplete").GetBoolean());
         Assert.Equal(path, json.RootElement.GetProperty("inputPath").GetString());
         Assert.Equal(path, json.RootElement.GetProperty("outputPath").GetString());
-        Assert.Equal(1, json.RootElement.GetProperty("schemaVersion").GetInt32());
-        Assert.Equal(original, File.ReadAllBytes(path + ".bak"));
-        Assert.True((await new SingleFileCleaningService().CleanAsync(path, new CleanOptions(Backup: true))).Success);
-        Assert.True(File.Exists(path + ".2.bak"));
-        Assert.Equal(original, File.ReadAllBytes(path + ".bak"));
+        Assert.Equal(2, json.RootElement.GetProperty("schemaVersion").GetInt32());
+        var backup = json.RootElement.GetProperty("backupPath").GetString()!;
+        Assert.StartsWith(AppDataPaths.BackupsDirectory, backup);
+        Assert.Equal(original, File.ReadAllBytes(backup));
+        var second = await new SingleFileCleaningService().CleanWithBackupAsync(path, new CleanOptions(Backup: true));
+        Assert.True(second.Result.Success);
+        Assert.Equal("-Договор 'пример' (2).docx", Path.GetFileName(second.BackupPath));
+        Assert.Equal(original, File.ReadAllBytes(backup));
+        Assert.Empty(Directory.GetFiles(dir, "*.bak"));
     }
     [Fact]
     public async Task InvalidGuiArgumentsNeverChangeDocument()

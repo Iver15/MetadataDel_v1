@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 using MetadataDel.Core.Cleaning;
+using MetadataDel.Core.CommandLine;
 
 namespace MetadataDel.Cli;
 
@@ -19,7 +20,7 @@ internal sealed class MainForm : Form
     private readonly AppSettings appSettings = AppSettings.Load();
     private readonly CheckBox backup = new() { Text = "Сохранять резервные копии", AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
     private readonly Label integrationStatus = Label("", 10);
-    private readonly Label backupHint = Label("Копии .bak — рядом. Оригиналы будут заменены.", 9);
+    private readonly Label backupHint = Label(BackupOnHint, 9);
     private readonly Label summary = Label("", 10);
     private readonly TextBox detail = new() { Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical, BackColor = SystemColors.Window, ForeColor = SystemColors.WindowText, AccessibleName = "Подробности выбранного документа" };
     private readonly ProgressBar progress = new() { Dock = DockStyle.Fill, Margin = Padding.Empty };
@@ -34,6 +35,8 @@ internal sealed class MainForm : Form
     private readonly ImageList rowHeight = new() { ImageSize = new Size(1, 52) };
     private readonly Font filenameFont = new("Segoe UI", 10, FontStyle.Bold);
     private readonly Font folderFont = new("Segoe UI", 9);
+    private const string BackupOnHint = "Оригиналы будут заменены, копии — в папке резервных копий.";
+    private CancellationTokenSource? cancellation;
     private bool busy, closeAfterWork, dragOver;
     private sealed class Entry(string path)
     {
@@ -102,7 +105,8 @@ internal sealed class MainForm : Form
             if (e.KeyCode == Keys.Delete && !busy) { RemoveSelected(); e.SuppressKeyPress = true; }
             if (e.KeyCode == Keys.Enter && !e.Control) { Reveal(); e.SuppressKeyPress = true; }
         };
-        FormClosing += (_, e) => { if (busy) { e.Cancel = true; closeAfterWork = true; detail.Text = "Окно закроется после завершения обработки."; } };
+        // Closing during work interrupts the current document safely (its original stays intact) and then closes.
+        FormClosing += (_, e) => { if (busy) { e.Cancel = true; closeAfterWork = true; cancellation?.Cancel(); detail.Text = "Обработка прерывается. Окно закроется через несколько секунд."; } };
         KeyPreview = true; KeyDown += async (_, e) => {
             if (e.Control && e.KeyCode == Keys.O) { PickFiles(); e.SuppressKeyPress = true; }
             if (e.Control && e.KeyCode == Keys.Enter && clean.Enabled) { e.SuppressKeyPress = true; await CleanAsync(); }
@@ -147,7 +151,7 @@ internal sealed class MainForm : Form
     }
     private void UpdateBackupHint()
     {
-        backupHint.Text = backup.Checked ? "Копии .bak — рядом. Оригиналы будут заменены." : "Без резервных копий. Оригиналы будут заменены.";
+        backupHint.Text = backup.Checked ? BackupOnHint : "Без резервных копий. Оригиналы будут заменены.";
         backupHint.ForeColor = backup.Checked || SystemInformation.HighContrast ? SystemColors.WindowText : Color.FromArgb(153, 76, 0);
     }
     private void DrawFile(object? sender, DrawListViewSubItemEventArgs e)
@@ -220,7 +224,7 @@ internal sealed class MainForm : Form
     private void RefreshActions()
     {
         var entries = files.Items.Cast<ListViewItem>().Select(i => (Entry)i.Tag!).ToArray();
-        int pending = entries.Count(i => !i.Attempted), ok = entries.Count(i => i.Kind is "success" or "warning"), failed = entries.Count(i => i.Kind == "error"), skipped = entries.Count(i => i.Kind == "unsupported");
+        int pending = entries.Count(i => !i.Attempted), ok = entries.Count(i => i.Kind is "success" or "warning"), partial = entries.Count(i => i.Kind == "partial"), failed = entries.Count(i => i.Kind == "error"), skipped = entries.Count(i => i.Kind == "unsupported");
         int warnings = entries.Count(i => i.Kind == "warning"); bool hasFiles = entries.Length > 0;
         clean.Enabled = !busy && pending > 0; clean.Text = busy ? "Обработка…" : pending > 0 ? $"Очистить · {pending}" : "Очистить файлы";
         choose.Enabled = backup.Enabled = settings.Enabled = !busy;
@@ -241,6 +245,7 @@ internal sealed class MainForm : Form
             if (pending > 0) parts.Add($"Готово к очистке: {pending}");
             if (ok > 0) parts.Add($"Очищено: {ok}");
             if (warnings > 0) parts.Add($"С замечаниями: {warnings}");
+            if (partial > 0) parts.Add($"Очищено не полностью: {partial}");
             if (failed > 0) parts.Add($"Не обработано: {failed}");
             if (skipped > 0) parts.Add($"Пропущено: {skipped}");
             summary.Text = string.Join(" · ", parts);
@@ -252,23 +257,38 @@ internal sealed class MainForm : Form
         if (busy || !clean.Enabled) return;
         var pending = files.Items.Cast<ListViewItem>().Where(i => !((Entry)i.Tag!).Attempted).ToArray();
         busy = true; RefreshActions(); var options = new CleanOptions(Backup: backup.Checked);
+        using var source = cancellation = new CancellationTokenSource(); var token = source.Token;
         progress.Maximum = Math.Max(1, pending.Length); progress.Value = 0;
         foreach (var item in pending)
         {
+            if (token.IsCancellationRequested) break;
             var entry = (Entry)item.Tag!; entry.Attempted = true; entry.Kind = "processing"; item.SubItems[1].Text = "Обрабатывается…";
             summary.Text = $"Обработка {progress.Value + 1} из {pending.Length}";
-            var result = await Task.Run(() => new SingleFileCleaningService().CleanAsync(entry.Path, options));
+            SingleFileCleaningOutcome outcome;
+            try { outcome = await Task.Run(() => new SingleFileCleaningService().CleanWithBackupAsync(entry.Path, options, token)); }
+            catch (OperationCanceledException) { outcome = new(new(entry.Path, false, "Очистка прервана. Исходный файл не изменён."), null); }
+            var result = outcome.Result;
             entry.Output = result.Success ? result.Path : null;
             bool warning = result.Success && !string.IsNullOrWhiteSpace(result.Message);
-            entry.Kind = result.Success ? warning ? "warning" : "success" : "error";
-            item.SubItems[1].Text = result.Success ? warning ? "! Есть замечания" : "✓ Очищен" : "× Не обработан";
-            entry.Message = result.Message ?? (result.Success ? "Готово. Очищенный файл сохранён." : "Не удалось обработать файл.");
+            // A file with remaining metadata is never shown as cleaned.
+            entry.Kind = !result.Success ? "error" : result.Incomplete ? "partial" : warning ? "warning" : "success";
+            item.SubItems[1].Text = entry.Kind switch { "partial" => "! Очищен не полностью", "warning" => "! Есть замечания", "success" => "✓ Очищен", _ => "× Не обработан" };
+            entry.Message = result.Incomplete
+                ? "Часть метаданных удалить не удалось. Проверьте документ перед отправкой." + (string.IsNullOrWhiteSpace(result.Message) ? "" : "\r\n" + result.Message)
+                : result.Message ?? (result.Success ? "Готово. Очищенный файл сохранён." : "Не удалось обработать файл.");
+            if (outcome.BackupPath != null) entry.Message += "\r\nРезервная копия оригинала сохранена в папке резервных копий (Настройки): " + outcome.BackupPath;
             item.ToolTipText = entry.Message + "\n" + (entry.Output ?? entry.Path);
             UpdateDetail(); progress.Value++;
         }
+        cancellation = null;
+        foreach (var item in pending)
+        {
+            var entry = (Entry)item.Tag!;
+            if (entry.Kind == "processing") { entry.Attempted = false; entry.Kind = "pending"; item.SubItems[1].Text = "○ Готов к очистке"; }
+        }
         busy = false; RefreshActions();
         if (files.SelectedItems.Count == 0 && files.Items.Count > 0)
-            (files.Items.Cast<ListViewItem>().FirstOrDefault(i => ((Entry)i.Tag!).Kind == "error") ?? files.Items[0]).Selected = true;
+            (files.Items.Cast<ListViewItem>().FirstOrDefault(i => ((Entry)i.Tag!).Kind is "error" or "partial") ?? files.Items[0]).Selected = true;
         UpdateDetail();
         if (closeAfterWork) Close();
     }

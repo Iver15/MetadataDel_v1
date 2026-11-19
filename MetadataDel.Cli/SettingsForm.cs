@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
+using MetadataDel.Core.CommandLine;
 using State = MetadataDel.Cli.SelfInstaller.ShellIntegrationState;
 
 namespace MetadataDel.Cli;
@@ -42,12 +43,13 @@ internal sealed class SettingsForm : Form
         var explorer = Stack(statusRow, buttons, Caption("Из Проводника файлы перезаписываются без резервных копий.\nДля важных документов используйте это окно с включёнными копиями.", 9, secondary: true));
         root.Controls.Add(Section("Правый клик в Проводнике", explorer));
 
-        root.Controls.Add(Section("Главное окно", Stack(backup, Caption("Копия «имя.bak» появляется рядом с оригиналом. Флажок в главном окне\nменяет эту же настройку.", 9, secondary: true))));
+        var backups = Action("Открыть папку резервных копий");
+        root.Controls.Add(Section("Главное окно", Stack(backup, Caption("Копии оригиналов хранятся в вашей личной папке, а не рядом с документом,\nи не попадут в архив или письмо вместе с ним. Флажок в главном окне\nменяет эту же настройку.", 9, secondary: true), backups)));
 
         var logs = Action("Открыть журнал"); var apps = Action("Установленные приложения");
         var serviceButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
         serviceButtons.Controls.AddRange([logs, apps]);
-        root.Controls.Add(Section("Обслуживание", Stack(serviceButtons, Caption("Удалить MetadataDel можно в разделе «Установленные приложения» Windows.\nДокументы и их копии при этом не затрагиваются.", 9, secondary: true))));
+        root.Controls.Add(Section("Обслуживание", Stack(serviceButtons, Caption("Удалить MetadataDel можно в разделе «Установленные приложения» Windows.\nДокументы и резервные копии при этом не удаляются, журнал удаляется.", 9, secondary: true))));
 
         var close = new Button { Text = "Готово", AutoSize = true, MinimumSize = new Size(96, 30), DialogResult = DialogResult.OK, Anchor = AnchorStyles.Right, Margin = new Padding(0, 6, 0, 0) };
         root.Controls.Add(close); AcceptButton = CancelButton = close;
@@ -59,6 +61,7 @@ internal sealed class SettingsForm : Form
         backup.CheckedChanged += (_, _) => { settings.Backup = backup.Checked; settings.Save(); };
         logs.Click += (_, _) => { Directory.CreateDirectory(SelfInstaller.LogsDirectory); Open("explorer.exe", $"\"{SelfInstaller.LogsDirectory}\""); };
         apps.Click += (_, _) => Open("ms-settings:appsfeatures", null);
+        backups.Click += (_, _) => { Directory.CreateDirectory(AppDataPaths.BackupsDirectory); Open("explorer.exe", $"\"{AppDataPaths.BackupsDirectory}\""); };
         RefreshState();
     }
 

@@ -64,9 +64,10 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall-shell"; Flags: runhi
 
 [UninstallDelete]
 Type: files; Name: "{userappdata}\Microsoft\Windows\SendTo\{#MySendToFileName}"
-; Журналы содержат пути очищенных файлов, поэтому удаляются вместе с программой.
+; Журналы и пояснения к ошибкам содержат пути очищенных файлов, поэтому удаляются вместе с программой.
 Type: filesandordirs; Name: "{localappdata}\MetadataDel\logs"
 Type: files; Name: "{localappdata}\MetadataDel\settings.json"
+; Папка Backups (оригиналы документов) намеренно не удаляется: dirifempty не тронет непустую папку.
 Type: dirifempty; Name: "{localappdata}\MetadataDel"
 
 [Icons]
@@ -170,6 +171,19 @@ begin
     WizardForm.FinishedHeadingLabel.Caption := 'MetadataDel установлен';
     WizardForm.FinishedLabel.Caption := FinishedText();
   end;
+end;
+
+// Резервные копии оригиналов остаются после удаления программы: сообщаем, где они лежат.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Backups: string;
+begin
+  if CurUninstallStep <> usPostUninstall then
+    exit;
+  Backups := ExpandConstant('{localappdata}\MetadataDel\Backups');
+  if DirExists(Backups) and not UninstallSilent() then
+    MsgBox('MetadataDel удалён. Резервные копии оригиналов документов сохранены и не удалялись:' + #13#10 + Backups + #13#10#13#10 +
+      'Они содержат исходные метаданные. Удалите папку вручную, если копии больше не нужны.', mbInformation, MB_OK);
 end;
 
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;

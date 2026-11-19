@@ -309,7 +309,7 @@ public sealed partial class MetadataCleaningTests
         SetFcLcb(wordDocument, 4, CommentRefs, 8 + 30);
 
         BinaryPrimitives.WriteUInt32LittleEndian(table.AsSpan(CommentExtra), 0x0C2A5125); // ATRDPost10.dttm
-        SetFcLcb(wordDocument, 97, CommentExtra, 18);
+        SetFcLcb(wordDocument, 112, CommentExtra, 18); // FibRgFcLcb2002.fcAtrdExtra (pair 97 is fcMsoEnvelope)
 
         // Clx with one compressed piece (8-bit text) at byte 1536: Pcdt, CPs {0, n}, Pcd { flags, fc | fCompressed, prm }.
         table[ClxOffset] = 0x02;

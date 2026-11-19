@@ -6,16 +6,18 @@ MetadataDel использует внешние библиотеки и инст
 
 MetadataDel распространяется по лицензии GNU Affero General Public License v3.0 or later. Полный текст лицензии находится в `LICENSE`.
 
-Выбор AGPL связан с использованием `itext7` 7.2.5 для PDF-обработки.
+Выбор AGPL связан с использованием iText (`itext` 9.8.1.1) для PDF-обработки.
 
 ## NuGet-зависимости
 
 | Компонент | Где используется | Лицензия / примечание |
 |-----------|------------------|------------------------|
-| `itext7` 7.2.5 | Очистка PDF | AGPL. Условия лицензии: https://www.gnu.org/licenses/agpl.html |
-| `DocumentFormat.OpenXml` 3.0.2 | Очистка `.docx` и `.xlsx` | MIT |
-| `System.IO.Packaging` 8.0.1 | Работа с OpenXML-пакетами | MIT |
-| `OpenMcdf` 3.1.4 | Очистка OLE-документов `.doc` и `.xls` | MPL-2.0 |
+| `itext` 9.8.1.1, `itext.commons` 9.8.1.1 | Очистка PDF | AGPL. Условия лицензии: https://www.gnu.org/licenses/agpl.html |
+| `itext.bouncy-castle-adapter` 9.8.1.1 | Чтение зашифрованных PDF (RC4/AES); без адаптера iText 9 не открывает такие файлы | AGPL |
+| `BouncyCastle.Cryptography` 2.7.0 | Криптография для адаптера iText (транзитивная зависимость) | MIT |
+| `DocumentFormat.OpenXml` 3.5.1 | Очистка `.docx` и `.xlsx` | MIT |
+| `System.IO.Packaging` 10.0.15 | Работа с OpenXML-пакетами | MIT |
+| `OpenMcdf` 3.4.0 | Очистка OLE-документов `.doc` и `.xls` | MPL-2.0 |
 | `xunit`, `Microsoft.NET.Test.Sdk` | Тестовый проект | Не входят в пользовательский дистрибутив |
 
 ## Примечание о распространении

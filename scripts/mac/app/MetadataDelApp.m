@@ -39,6 +39,7 @@
 @property BOOL busy, closeAfterWork;
 @property NSUInteger completed, successes, warnings;
 @end
+static NSString *const MDBackupOnHint=@"Оригиналы будут заменены, копии — в папке резервных копий.";
 @implementation AppDelegate
 + (void)initialize { [NSUserDefaults.standardUserDefaults registerDefaults:@{MDBackupDefaultsKey:@YES}]; }
 - (NSTextField *)label:(NSString *)text size:(CGFloat)size weight:(NSFontWeight)weight {
@@ -166,7 +167,7 @@
     [self.detailScroll.heightAnchor constraintEqualToConstant:50].active=YES;
     self.backup=[NSButton checkboxWithTitle:@"Сохранять резервные копии" target:self action:@selector(backupChanged:)];
     self.backup.state=[NSUserDefaults.standardUserDefaults boolForKey:MDBackupDefaultsKey] ? NSControlStateValueOn : NSControlStateValueOff;
-    self.backupHint=[self label:@"Копии .bak — рядом. Оригиналы будут заменены." size:11 weight:NSFontWeightRegular]; self.backupHint.textColor=NSColor.secondaryLabelColor;
+    self.backupHint=[self label:MDBackupOnHint size:11 weight:NSFontWeightRegular]; self.backupHint.textColor=NSColor.secondaryLabelColor;
     NSStackView *options=[self stack:@[self.backup,self.backupHint] vertical:YES]; options.spacing=4;
     self.clean=[self button:@"Очистить файлы" action:@selector(cleanFiles:)]; self.clean.bezelColor=[NSColor colorWithSRGBRed:0.69 green:0.27 blue:0.14 alpha:1];
     self.clean.keyEquivalent=@"\r"; self.clean.keyEquivalentModifierMask=NSEventModifierFlagCommand;
@@ -208,8 +209,8 @@
         content=[self stack:@[icon,labels] vertical:NO];
     } else {
         NSString *kind=file[@"kind"] ?: @"pending";
-        NSDictionary *symbols=@{@"pending":@"clock",@"processing":@"arrow.triangle.2.circlepath",@"success":@"checkmark.circle.fill",@"warning":@"exclamationmark.triangle.fill",@"error":@"xmark.circle.fill",@"unsupported":@"minus.circle"};
-        NSColor *color=[kind isEqual:@"success"] ? NSColor.systemGreenColor : [kind isEqual:@"error"] ? NSColor.systemRedColor : [kind isEqual:@"warning"] ? NSColor.systemOrangeColor : NSColor.secondaryLabelColor;
+        NSDictionary *symbols=@{@"pending":@"clock",@"processing":@"arrow.triangle.2.circlepath",@"success":@"checkmark.circle.fill",@"warning":@"exclamationmark.triangle.fill",@"partial":@"exclamationmark.triangle.fill",@"error":@"xmark.circle.fill",@"unsupported":@"minus.circle"};
+        NSColor *color=[kind isEqual:@"success"] ? NSColor.systemGreenColor : [kind isEqual:@"error"] ? NSColor.systemRedColor : [kind isEqual:@"warning"] || [kind isEqual:@"partial"] ? NSColor.systemOrangeColor : NSColor.secondaryLabelColor;
         NSImageView *icon=[self symbol:symbols[kind] size:13]; icon.contentTintColor=color;
         NSTextField *text=[NSTextField labelWithString:file[@"state"]]; text.font=[NSFont systemFontOfSize:12]; text.textColor=color; text.lineBreakMode=NSLineBreakByTruncatingTail;
         cell.statusColor=color; cell.statusLabel=text; cell.statusIcon=icon;
@@ -229,12 +230,13 @@
 }
 - (void)tableViewSelectionDidChange:(NSNotification *)notification { [self refresh]; [self updateDetail]; }
 - (void)refresh {
-    NSUInteger pending=0,ok=0,warn=0,failed=0,skipped=0;
+    NSUInteger pending=0,ok=0,warn=0,partial=0,failed=0,skipped=0;
     for (NSDictionary *file in self.files) {
         NSString *kind=file[@"kind"];
         if (![file[@"attempted"] boolValue]) pending++;
         else if ([kind isEqual:@"success"]) ok++;
         else if ([kind isEqual:@"warning"]) { ok++; warn++; }
+        else if ([kind isEqual:@"partial"]) partial++;
         else if ([kind isEqual:@"error"]) failed++;
         else if ([kind isEqual:@"unsupported"]) skipped++;
     }
@@ -265,6 +267,7 @@
         if (pending) [parts addObject:[NSString stringWithFormat:@"Готово к очистке: %lu",pending]];
         if (ok) [parts addObject:[NSString stringWithFormat:@"Очищено: %lu",ok]];
         if (warn) [parts addObject:[NSString stringWithFormat:@"С замечаниями: %lu",warn]];
+        if (partial) [parts addObject:[NSString stringWithFormat:@"Очищено не полностью: %lu",partial]];
         if (failed) [parts addObject:[NSString stringWithFormat:@"Не обработано: %lu",failed]];
         if (skipped) [parts addObject:[NSString stringWithFormat:@"Пропущено: %lu",skipped]];
         self.summary.stringValue=[parts componentsJoinedByString:@" · "];
@@ -277,7 +280,7 @@
 }
 - (void)backupApply {
     BOOL on=self.backup.state==NSControlStateValueOn;
-    self.backupHint.stringValue=on ? @"Копии .bak — рядом. Оригиналы будут заменены." : @"Без резервных копий. Оригиналы будут заменены.";
+    self.backupHint.stringValue=on ? MDBackupOnHint : @"Без резервных копий. Оригиналы будут заменены.";
     self.backupHint.textColor=on ? NSColor.secondaryLabelColor : NSColor.systemOrangeColor;
 }
 - (void)clearFiles:(id)sender { if (self.busy) return; [self.files removeAllObjects]; [self.table reloadData]; [self refresh]; }
@@ -299,10 +302,10 @@
 }
 - (void)cleanNext {
     NSMutableDictionary *next=nil; for (NSMutableDictionary *file in self.files) if (![file[@"attempted"] boolValue]) { next=file; break; }
-    if (!next) {
+    if (!next || self.closeAfterWork) {
         self.busy=NO; [self refresh];
         if (self.table.selectedRow<0 && self.files.count) {
-            NSUInteger row=[self.files indexOfObjectPassingTest:^BOOL(NSDictionary *file,NSUInteger index,BOOL *stop){ return [file[@"kind"] isEqual:@"error"]; }];
+            NSUInteger row=[self.files indexOfObjectPassingTest:^BOOL(NSDictionary *file,NSUInteger index,BOOL *stop){ return [file[@"kind"] isEqual:@"error"] || [file[@"kind"] isEqual:@"partial"]; }];
             [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:row==NSNotFound ? 0 : row] byExtendingSelection:NO];
         }
         [self updateDetail];
@@ -312,11 +315,16 @@
     self.summary.stringValue=[NSString stringWithFormat:@"Обработка %lu из %.0f",self.completed+1,self.progress.maxValue]; [self.table reloadData];
     [self.runner cleanFileURL:[NSURL fileURLWithPath:next[@"path"]] backup:self.backup.state==NSControlStateValueOn completion:^(NSDictionary *result,NSError *error){
         BOOL success=!error && [result[@"success"] boolValue]; NSString *message=[result[@"message"] isKindOfClass:NSString.class] ? result[@"message"] : nil;
-        BOOL warning=success && message.length>0; if (success) self.successes++; if (warning) self.warnings++;
-        next[@"state"]=success ? warning ? @"Есть замечания" : @"Очищен" : @"Не обработан";
-        next[@"kind"]=success ? warning ? @"warning" : @"success" : @"error";
+        // Written, but some metadata remains: a warning state, never shown or counted as cleaned.
+        BOOL partial=success && [result[@"incomplete"] boolValue];
+        BOOL warning=success && !partial && message.length>0; if (success && !partial) self.successes++; if (warning) self.warnings++;
+        next[@"state"]=partial ? @"Очищен не полностью" : success ? warning ? @"Есть замечания" : @"Очищен" : @"Не обработан";
+        next[@"kind"]=partial ? @"partial" : success ? warning ? @"warning" : @"success" : @"error";
         if (success) next[@"output"]=result[@"outputPath"];
-        next[@"message"]=error.localizedDescription ?: message ?: result[@"outputPath"] ?: @"Не удалось обработать файл.";
+        NSString *text=error.localizedDescription ?: message ?: result[@"outputPath"] ?: @"Не удалось обработать файл.";
+        if (partial) text=[@"Часть метаданных удалить не удалось. Проверьте документ перед отправкой." stringByAppendingString:message.length ? [@"\n" stringByAppendingString:message] : @""];
+        if ([result[@"backupPath"] isKindOfClass:NSString.class]) text=[text stringByAppendingString:@"\nРезервная копия оригинала сохранена в папке резервных копий (Настройки → Открыть папку резервных копий)."];
+        next[@"message"]=text;
         [self updateDetail]; self.progress.doubleValue=++self.completed; [self.table reloadData]; [self cleanNext];
     }];
 }
@@ -350,7 +358,8 @@
     if (item.action==@selector(revealFile:)) return self.reveal.enabled;
     return YES;
 }
-- (BOOL)windowShouldClose:(NSWindow *)sender { if (self.busy) { self.closeAfterWork=YES; self.detail.string=@"Окно закроется после завершения обработки."; return NO; } return YES; }
+// Closing during work interrupts the current document safely (its original stays intact) and then quits.
+- (BOOL)windowShouldClose:(NSWindow *)sender { if (self.busy) { self.closeAfterWork=YES; [self.runner cancel]; self.detail.string=@"Обработка прерывается. Окно закроется через несколько секунд."; return NO; } return YES; }
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender { return [self windowShouldClose:self.window] ? NSTerminateNow : NSTerminateCancel; }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender { return YES; }
 - (void)application:(NSApplication *)sender openFiles:(NSArray<NSString *> *)filenames {

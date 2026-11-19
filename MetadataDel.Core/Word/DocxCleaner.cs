@@ -34,7 +34,10 @@ public sealed class DocxCleaner : IFileCleaner
                 warnings.Add("После очистки остались признаки метаданных: " + audit.Summarize());
             var timestampWarning = FileCleaningTransaction.WipeTimestamps(path, options.WipeFsTimestamps);
             if (timestampWarning != null) warnings.Add(timestampWarning);
-            return new CleanResult(path, true, warnings.Count == 0 ? null : string.Join(" ", warnings));
+            return new CleanResult(path, true, warnings.Count == 0 ? null : string.Join(" ", warnings))
+            {
+                Incomplete = context.Incomplete || audit.HasSensitiveMetadata
+            };
         }
         catch (Exception ex)
         {

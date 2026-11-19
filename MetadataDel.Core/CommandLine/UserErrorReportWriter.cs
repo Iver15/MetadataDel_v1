@@ -1,28 +1,48 @@
 using System.Text;
 
-namespace MetadataDel.Cli;
+namespace MetadataDel.Core.CommandLine;
 
-internal static class UserErrorReportWriter
+/// <summary>
+/// Plain-language explanation of a failed file. Written to the private logs folder, never next to the document:
+/// the report contains full paths and must neither travel with the folder nor overwrite the user's files.
+/// </summary>
+public static class UserErrorReportWriter
 {
+    /// <summary>Writes a new uniquely named report; returns its path or null when it could not be written.</summary>
     public static string? TryWrite(string path, string reason, Exception? exception = null)
     {
         try
         {
-            var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            var directory = AppDataPaths.EnsurePrivateDirectory(AppDataPaths.LogsDirectory);
+            var name = SafeName(Path.GetFileName(path));
+            for (var attempt = 0; attempt < 5; attempt++)
             {
-                return null;
+                var reportPath = Path.Combine(directory,
+                    $"{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..8]}-{name}.MetadataDel-ошибка.txt");
+                try
+                {
+                    using var stream = new FileStream(reportPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                    using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+                    writer.Write(BuildReport(path, reason, exception));
+                    return reportPath;
+                }
+                catch (IOException) when (File.Exists(reportPath)) { }
             }
-
-            var fileName = Path.GetFileName(path) + ".MetadataDel-ошибка.txt";
-            var reportPath = Path.Combine(directory, fileName);
-            File.WriteAllText(reportPath, BuildReport(path, reason, exception), Encoding.UTF8);
-            return reportPath;
+            return null;
         }
         catch
         {
             return null;
         }
+    }
+
+    // Keeps the report recognisable without letting the document name break the file name on any platform.
+    private static string SafeName(string name)
+    {
+        var invalid = new HashSet<char>(Path.GetInvalidFileNameChars()) { '\\', '/', ':', '*', '?', '"', '<', '>', '|' };
+        var safe = new string(name.Select(c => invalid.Contains(c) || char.IsControl(c) ? '_' : c).ToArray()).Trim(' ', '.');
+        if (safe.Length > 80) safe = safe[..80];
+        return safe.Length == 0 ? "файл" : safe;
     }
 
     private static string BuildReport(string path, string reason, Exception? exception)

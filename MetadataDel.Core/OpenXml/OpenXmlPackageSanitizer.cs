@@ -15,14 +15,22 @@ internal sealed class OpenXmlSanitizeContext
 {
     public const int MaxDepth = 8;
 
-    public OpenXmlSanitizeContext(CancellationToken cancellationToken = default) : this(new List<string>(), 0, cancellationToken) { }
+    public OpenXmlSanitizeContext(CancellationToken cancellationToken = default) : this(new List<string>(), new IncompleteFlag(), 0, cancellationToken) { }
 
-    private OpenXmlSanitizeContext(List<string> warnings, int depth, CancellationToken cancellationToken)
+    private OpenXmlSanitizeContext(List<string> warnings, IncompleteFlag incomplete, int depth, CancellationToken cancellationToken)
     {
         Warnings = warnings;
+        _incomplete = incomplete;
         Depth = depth;
         CancellationToken = cancellationToken;
     }
+
+    private sealed class IncompleteFlag { public bool Value; }
+
+    private readonly IncompleteFlag _incomplete;
+
+    /// <summary>Часть метаданных осталась в файле (общий признак для всех вложенных документов).</summary>
+    public bool Incomplete => _incomplete.Value;
 
     public List<string> Warnings { get; }
 
@@ -31,12 +39,22 @@ internal sealed class OpenXmlSanitizeContext
 
     public CancellationToken CancellationToken { get; }
 
-    public OpenXmlSanitizeContext Nested() => new(Warnings, Depth + 1, CancellationToken);
+    public OpenXmlSanitizeContext Nested() => new(Warnings, _incomplete, Depth + 1, CancellationToken);
 
     public void Warn(string warning)
     {
         if (!Warnings.Contains(warning)) Warnings.Add(warning);
     }
+
+    /// <summary>Предупреждение о метаданных, которые остались в файле: результат будет помечен как неполный.</summary>
+    public void WarnIncomplete(string warning)
+    {
+        Warn(warning);
+        _incomplete.Value = true;
+    }
+
+    /// <summary>Помечает результат неполным, когда предупреждение уже записано (например, очистителем OLE).</summary>
+    public void MarkIncomplete() => _incomplete.Value = true;
 }
 
 /// <summary>
@@ -59,7 +77,46 @@ internal static class OpenXmlPackageSanitizer
         @"^\s*(?:[A-Za-z]:[\\/]|\\\\|file:|/(?:Users|home|Volumes|private|var|tmp|mnt|media)/)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    // Относительный путь с папками (..\, ./) или сетевой путь вида //server/share.
+    private static readonly Regex RelativePathPattern = new(@"^\s*(?:\.{1,2}[\\/]|//)", RegexOptions.CultureInvariant);
+
+    // Схема URI: http:, mailto:, ftp: и т. п. Одна буква с двоеточием — это диск Windows, а не схема.
+    private static readonly Regex UriSchemePattern = new(@"^\s*[A-Za-z][A-Za-z0-9+.\-]+:", RegexOptions.CultureInvariant);
+
+    // Веб-адрес без схемы (www.example.com/page): это содержимое ссылки, а не путь к файлу.
+    private static readonly Regex WebHostPattern = new(
+        @"^\s*(?:www\.|[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}(?::\d+)?/)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // Имя файла изображения или видео целиком (IMG_2031.JPG, «Снимок экрана … .png»): Word и Excel подставляют
+    // его в имя и описание картинки, и оно выдаёт устройство, дату съёмки или имя пользователя.
+    private static readonly Regex MediaFileNamePattern = new(
+        @"^[^\r\n<>""|?*]{0,255}?\.(?:jpe?g|jpe|jfif|png|gif|bmp|dib|tiff?|heic|heif|webp|avif|emf|wmf|emz|wmz|svg|ico|psd|raw|dng|cr2|cr3|nef|arw|orf|rw2|" +
+        @"mp4|m4v|mov|avi|wmv|mkv|webm|3gp|mp3|wav|m4a|wma|aac|flac|ogg)\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private const string DigitalSignatureOrigin = "/digital-signature/origin";
+
     public static bool LooksLikeLocalPath(string? value) => value != null && LocalPathPattern.IsMatch(value);
+
+    /// <summary>Абсолютный локальный или сетевой путь либо относительный путь с папками.</summary>
+    public static bool LooksLikeLocalOrRelativePath(string? value) =>
+        value != null && (LocalPathPattern.IsMatch(value) || RelativePathPattern.IsMatch(value));
+
+    /// <summary>Значение целиком — имя медиафайла (с путём или без).</summary>
+    public static bool LooksLikeMediaFileName(string? value) => value != null && MediaFileNamePattern.IsMatch(value);
+
+    /// <summary>
+    /// Имя или описание объекта, которое на самом деле является путём или именем исходного файла.
+    /// Одно правило для очистки и для проверки, чтобы проверка не находила то, что очистка оставляет.
+    /// </summary>
+    public static bool IsIdentifyingFileReference(string? value) => LooksLikeLocalPath(value) || LooksLikeMediaFileName(value);
+
+    /// <summary>
+    /// Внешняя ссылка на файл, а не на ресурс по URI-схеме (http, mailto и т. п.): абсолютный или относительный путь.
+    /// </summary>
+    public static bool IsExternalFilePath(string target) =>
+        LooksLikeLocalPath(target) ||
+        target.Length > 0 && !target.StartsWith('#') && !UriSchemePattern.IsMatch(target) && !WebHostPattern.IsMatch(target);
 
     /// <summary>Имя файла из локального пути или file:-ссылки; якорь (#...) сохраняется.</summary>
     public static string FileNameOf(string path)
@@ -86,6 +143,7 @@ internal static class OpenXmlPackageSanitizer
         foreach (var part in package.Parts.Select(p => p.OpenXmlPart)
                      .Where(p => p is CustomFilePropertiesPart or ThumbnailPart).ToList())
             package.DeletePart(part);
+        RemoveDigitalSignatures(package, context);
 
         var visited = new HashSet<OpenXmlPart>();
         var deletions = new List<(OpenXmlPartContainer Parent, OpenXmlPart Part)>();
@@ -97,6 +155,7 @@ internal static class OpenXmlPackageSanitizer
             switch (part)
             {
                 case CustomXmlPart:
+                    WordPrivacySanitizer.WarnIfBibliography(part, context);
                     deletions.Add((parent, part));
                     break;
                 case EmbeddedPackagePart embedded:
@@ -107,9 +166,9 @@ internal static class OpenXmlPackageSanitizer
                     break;
                 default:
                     if (part.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-                        StripImage(part);
+                        StripImage(part, context);
                     else if (IsScannableXml(part))
-                        SanitizeDrawingAttributes(part);
+                        SanitizeDrawingAttributes(part, context);
                     break;
             }
         }
@@ -134,27 +193,54 @@ internal static class OpenXmlPackageSanitizer
     /// <summary>
     /// Ссылки на локальные и сетевые файлы (гиперссылки, связанные картинки и объекты) сокращаются до имени файла:
     /// у получателя абсолютный путь всё равно не откроется, а имя пользователя и структура папок раскрываются.
+    /// Относительные пути (..\..\Отдел\Файл.xlsx) раскрывают структуру папок так же. Ссылки со схемой URI
+    /// (http, https, mailto, ftp и т. п.) — содержимое документа, их не трогаем; якорь (#...) сохраняется.
     /// </summary>
     private static void RewriteLocalLinks(OpenXmlPartContainer container, OpenXmlSanitizeContext context)
     {
         foreach (var hyperlink in container.HyperlinkRelationships.Where(r => r.IsExternal).ToList())
         {
-            var target = hyperlink.Uri.OriginalString;
-            if (!LooksLikeLocalPath(target)) continue;
+            if (ShortenedTarget(hyperlink.Uri) is not { } shortened) continue;
             container.DeleteReferenceRelationship(hyperlink);
-            container.AddHyperlinkRelationship(new Uri(FileNameOf(Uri.UnescapeDataString(target)), UriKind.Relative), true, hyperlink.Id);
+            container.AddHyperlinkRelationship(shortened, true, hyperlink.Id);
             context.Warn("Ссылки на локальные файлы сокращены до имени файла.");
         }
 
         foreach (var external in container.ExternalRelationships.ToList())
         {
-            var target = external.Uri.OriginalString;
-            if (!LooksLikeLocalPath(target)) continue;
+            if (ShortenedTarget(external.Uri) is not { } shortened) continue;
             container.DeleteExternalRelationship(external);
-            container.AddExternalRelationship(external.RelationshipType, new Uri(FileNameOf(Uri.UnescapeDataString(target)), UriKind.Relative), external.Id);
+            container.AddExternalRelationship(external.RelationshipType, shortened, external.Id);
             context.Warn("Ссылки на локальные файлы сокращены до имени файла.");
         }
     }
+
+    private static Uri? ShortenedTarget(Uri uri)
+    {
+        var target = uri.OriginalString;
+        if (!IsExternalFilePath(target)) return null;
+        var name = FileNameOf(Uri.UnescapeDataString(target));
+        if (name == target || name == Uri.UnescapeDataString(target)) return null;
+        return new Uri(name, UriKind.Relative);
+    }
+
+    /// <summary>
+    /// Цифровая подпись после очистки всё равно недействительна, а её части хранят сертификат подписавшего
+    /// (имя, адрес почты, издатель) и время подписания.
+    /// </summary>
+    private static void RemoveDigitalSignatures(OpenXmlPackage package, OpenXmlSanitizeContext context)
+    {
+        var signatures = package.Parts.Select(p => p.OpenXmlPart)
+            .Where(p => p is DigitalSignatureOriginPart || p.RelationshipType.EndsWith(DigitalSignatureOrigin, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        foreach (var part in signatures)
+            package.DeletePart(part);
+        if (signatures.Count > 0) context.Warn(DigitalSignatureWarning);
+    }
+
+    private const string DigitalSignatureWarning =
+        "Цифровая подпись удалена: после очистки она стала бы недействительной, а сертификат раскрывает имя и адрес подписавшего и время подписания. " +
+        "При необходимости подпишите очищенный документ заново.";
 
     public static void CleanPackageProperties(IPackageProperties properties)
     {
@@ -195,7 +281,7 @@ internal static class OpenXmlPackageSanitizer
         IsXmlContentType(part.ContentType) &&
         !SkippedXmlContentTypes.Any(t => part.ContentType.EndsWith(t, StringComparison.OrdinalIgnoreCase));
 
-    private static void StripImage(OpenXmlPart part)
+    private static void StripImage(OpenXmlPart part, OpenXmlSanitizeContext context)
     {
         byte[] data;
         using (var stream = part.GetStream(FileMode.Open, FileAccess.Read))
@@ -204,17 +290,31 @@ internal static class OpenXmlPackageSanitizer
             stream.CopyTo(buffer);
             data = buffer.ToArray();
         }
-        var stripped = ImageMetadata.Strip(data);
+        var stripped = StripImageData(data, context);
         if (stripped == null) return;
         using var output = new MemoryStream(stripped);
         part.FeedData(output);
     }
 
     /// <summary>
-    /// Убирает пути к исходным файлам картинок: Word и Excel записывают их в описание (descr), имя фигуры
-    /// или VML-атрибуты o:title/o:href.
+    /// Снимает метаданные изображения. Повреждённые картинки и форматы, которые можно только распознать
+    /// (HEIC/AVIF с EXIF или XMP), помечают результат неполным: часть сведений могла остаться.
     /// </summary>
-    private static void SanitizeDrawingAttributes(OpenXmlPart part)
+    private static byte[]? StripImageData(byte[] data, OpenXmlSanitizeContext context)
+    {
+        var result = ImageMetadata.StripDetailed(data);
+        if (result.Status == ImageStripStatus.Malformed)
+            context.WarnIncomplete("Часть изображений повреждена: метаданные удалены из читаемой части, остаток проверить не удалось.");
+        else if (result.Status == ImageStripStatus.UnsupportedWithMetadata || result.ResidualMetadata)
+            context.WarnIncomplete("В документе есть изображения (например, HEIC или AVIF) с метаданными, которые не удаляются: EXIF или XMP в них сохранены.");
+        return result.Data;
+    }
+
+    /// <summary>
+    /// Убирает пути и имена исходных файлов картинок: Word и Excel записывают их в описание (descr), заголовок,
+    /// имя фигуры или VML-атрибуты o:title/o:href/alt, а также GUID создания объектов (a16:creationId).
+    /// </summary>
+    private static void SanitizeDrawingAttributes(OpenXmlPart part, OpenXmlSanitizeContext context)
     {
         try
         {
@@ -222,49 +322,54 @@ internal static class OpenXmlPackageSanitizer
         }
         catch (XmlException)
         {
-            // Устаревший VML бывает невалидным XML; такие части не меняем, аудит сообщит о найденных путях.
+            // Устаревший VML бывает невалидным XML; такие части не меняем и честно сообщаем, что не проверили их.
+            context.WarnIncomplete($"Часть {part.Uri} не разбирается как XML: имена и пути к исходным файлам в ней не проверены.");
         }
     }
+
+    private const string Office2014DrawingNamespace = "http://schemas.microsoft.com/office/drawing/2014/main";
 
     internal static bool SanitizeDrawingAttributes(XDocument document)
     {
         var changed = false;
         foreach (var element in document.Descendants())
         {
-            switch (element.Name.LocalName)
+            var local = element.Name.LocalName;
+            foreach (var attribute in element.Attributes()
+                         .Where(a => !a.IsNamespaceDeclaration &&
+                                     (a.Name.LocalName is "descr" or "title" or "href" or "alt" && IsIdentifyingFileReference(a.Value) ||
+                                      local == "imagedata" && a.Name.LocalName == "title"))
+                         .ToList())
             {
-                case "docPr":
-                case "cNvPr":
-                    foreach (var attribute in element.Attributes()
-                                 .Where(a => a.Name.LocalName is "descr" or "title" && LooksLikeLocalPath(a.Value)).ToList())
-                    {
-                        attribute.Remove();
-                        changed = true;
-                    }
-                    var name = element.Attribute("name");
-                    if (name != null && LooksLikeLocalPath(name.Value))
-                    {
-                        name.Value = "Picture " + ((string?)element.Attribute("id") ?? "1");
-                        changed = true;
-                    }
-                    break;
-                case "imagedata":
-                    foreach (var attribute in element.Attributes()
-                                 .Where(a => a.Name.LocalName == "title" || a.Name.LocalName == "href" && LooksLikeLocalPath(a.Value)).ToList())
-                    {
-                        attribute.Remove();
-                        changed = true;
-                    }
-                    break;
-                case "shape":
-                    var alt = element.Attribute("alt");
-                    if (alt != null && LooksLikeLocalPath(alt.Value))
-                    {
-                        alt.Remove();
-                        changed = true;
-                    }
-                    break;
+                attribute.Remove();
+                changed = true;
             }
+
+            if (local is "docPr" or "cNvPr")
+            {
+                // Обычные имена Word («Рисунок 3», «Picture 3») не трогаем: заменяются только имена и пути файлов.
+                var name = element.Attribute("name");
+                if (name != null && IsIdentifyingFileReference(name.Value))
+                {
+                    name.Value = "Picture " + ((string?)element.Attribute("id") ?? "1");
+                    changed = true;
+                }
+            }
+        }
+
+        // a16:creationId и a16:predDERef — GUID, созданные при вставке объекта; по ним связываются копии документа.
+        foreach (var identifier in document.Descendants()
+                     .Where(e => e.Name.Namespace == Office2014DrawingNamespace && e.Name.LocalName is "creationId" or "predDERef" &&
+                                 e.Parent?.Name.LocalName == "ext")
+                     .ToList())
+        {
+            var extension = identifier.Parent!;
+            identifier.Remove();
+            changed = true;
+            if (extension.HasElements) continue;
+            var list = extension.Parent;
+            extension.Remove();
+            if (list?.Name.LocalName == "extLst" && !list.HasElements) list.Remove();
         }
         return changed;
     }
@@ -275,13 +380,15 @@ internal static class OpenXmlPackageSanitizer
         if (!IsCompoundFile(data)) return;
         try
         {
-            var scrubbed = OleDocumentCleaner.ScrubCompoundFile(data, context.Warnings, context.CancellationToken);
+            var scrubbed = OleDocumentCleaner.ScrubCompoundFile(data, context.Warnings, out var incomplete, context.CancellationToken);
             using var output = new MemoryStream(scrubbed);
             part.FeedData(output);
+            // Предупреждение уже добавлено очистителем OLE; здесь только переносим признак неполной очистки.
+            if (incomplete) context.MarkIncomplete();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            context.Warn($"Не удалось очистить встроенный OLE-объект {part.Uri}: {ex.Message}");
+            context.WarnIncomplete($"Не удалось очистить встроенный OLE-объект {part.Uri}: {ex.Message}");
         }
     }
 
@@ -289,7 +396,7 @@ internal static class OpenXmlPackageSanitizer
     {
         if (context.Depth + 1 > OpenXmlSanitizeContext.MaxDepth)
         {
-            context.Warn($"Слишком глубокая вложенность объектов, {part.Uri} не очищен.");
+            context.WarnIncomplete($"Слишком глубокая вложенность объектов, {part.Uri} не очищен.");
             return;
         }
 
@@ -305,7 +412,7 @@ internal static class OpenXmlPackageSanitizer
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            context.Warn($"Не удалось очистить встроенный документ {part.Uri}: {ex.Message}");
+            context.WarnIncomplete($"Не удалось очистить встроенный документ {part.Uri}: {ex.Message}");
             return;
         }
         buffer.Position = 0;
@@ -335,7 +442,7 @@ internal static class OpenXmlPackageSanitizer
         }
         else
         {
-            SanitizeGenericPackage(stream);
+            SanitizeGenericPackage(stream, context);
         }
     }
 
@@ -356,9 +463,19 @@ internal static class OpenXmlPackageSanitizer
     }
 
     /// <summary>Пакеты неизвестного типа (например, Visio): свойства, пользовательские свойства и изображения.</summary>
-    private static void SanitizeGenericPackage(Stream stream)
+    private static void SanitizeGenericPackage(Stream stream, OpenXmlSanitizeContext context)
     {
         using var package = Package.Open(stream, FileMode.Open, FileAccess.ReadWrite);
+        var signatureRelationships = package.GetRelationships()
+            .Where(r => r.RelationshipType.EndsWith(DigitalSignatureOrigin, StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var relationship in signatureRelationships)
+            package.DeleteRelationship(relationship.Id);
+        var signatureParts = package.GetParts()
+            .Where(p => p.ContentType.StartsWith("application/vnd.openxmlformats-package.digital-signature", StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var part in signatureParts)
+            package.DeletePart(part.Uri);
+        if (signatureRelationships.Count + signatureParts.Count > 0) context.Warn(DigitalSignatureWarning);
+
         var core = package.PackageProperties;
         core.Creator = null; core.LastModifiedBy = null; core.Title = null; core.Subject = null;
         core.Keywords = null; core.Description = null; core.Category = null; core.ContentStatus = null;
@@ -384,7 +501,7 @@ internal static class OpenXmlPackageSanitizer
                     input.CopyTo(buffer);
                     data = buffer.ToArray();
                 }
-                var stripped = ImageMetadata.Strip(data);
+                var stripped = StripImageData(data, context);
                 if (stripped == null) continue;
                 using var output = part.GetStream(FileMode.Create, FileAccess.Write);
                 output.Write(stripped);

@@ -4,6 +4,7 @@ using iText.Kernel.Pdf;
 using iText.Kernel.Pdf.Canvas.Parser;
 using MetadataDel.Core.Audit;
 using MetadataDel.Core.Cleaning;
+using MetadataDel.Core.CommandLine;
 using MetadataDel.Core.Excel;
 using MetadataDel.Core.Pdf;
 using MetadataDel.Core.Word;
@@ -29,7 +30,10 @@ public sealed partial class MetadataCleaningTests
         var path = Path.Combine(_tempDirectory, "backup.pdf");
         CreatePdf(path);
         var original = File.ReadAllBytes(path);
-        Directory.CreateDirectory(path + ".bak");
+        // The private backups folder cannot be created: its parent is a regular file.
+        var blocked = Path.Combine(_tempDirectory, "blocked-profile");
+        File.WriteAllText(blocked, "");
+        using var profile = AppDataPaths.OverrideRootForTests(blocked);
         var result = await new PdfCleaner().CleanAsync(path, new CleanOptions(Backup: true));
         Assert.False(result.Success);
         Assert.Equal(original, File.ReadAllBytes(path));
@@ -92,7 +96,7 @@ public sealed partial class MetadataCleaningTests
         CreateDocx(path);
         using (var document = WordprocessingDocument.Open(path, true))
         {
-            document.MainDocumentPart!.Document.Body!.Descendants<W.Run>().First().PrependChild(
+            document.MainDocumentPart!.Document!.Body!.Descendants<W.Run>().First().PrependChild(
                 new W.RunProperties(new W.RunPropertiesChange(new W.PreviousRunProperties(new W.Bold()))
                 { Id = "7", Author = "Private" }));
         }
@@ -107,7 +111,7 @@ public sealed partial class MetadataCleaningTests
         CreateWorkbookArtifactXlsx(path);
         using (var document = SpreadsheetDocument.Open(path, true))
         {
-            document.WorkbookPart!.Workbook.GetFirstChild<S.DefinedNames>()!.AppendChild(
+            document.WorkbookPart!.Workbook!.GetFirstChild<S.DefinedNames>()!.AppendChild(
                 new S.DefinedName { Name = "LocalTotal", Text = "SUM(Table1[Amount])" });
         }
         Assert.True((await new ExcelCleaner().CleanAsync(path, new CleanOptions())).Success);
@@ -135,6 +139,7 @@ public sealed partial class MetadataCleaningTests
     {
         var path = Path.Combine(_tempDirectory, "legacy." + extension);
         var secret = "PRIVATE-OWNER-unique-marker";
+        using var profile = AppDataPaths.OverrideRootForTests(Path.Combine(_tempDirectory, "profile"));
         using (var root = OpenMcdf.RootStorage.Create(path))
         {
             using (var properties = root.CreateStream("\x05SummaryInformation"))
@@ -152,7 +157,8 @@ public sealed partial class MetadataCleaningTests
         using var cleaned = OpenMcdf.RootStorage.OpenRead(path);
         using var reader = new StreamReader(cleaned.OpenStream("Workbook"));
         Assert.Equal("Visible workbook content", reader.ReadToEnd());
-        Assert.Contains(secret, Encoding.UTF8.GetString(File.ReadAllBytes(path + ".bak")));
+        Assert.False(File.Exists(path + ".bak"));
+        Assert.Contains(secret, Encoding.UTF8.GetString(File.ReadAllBytes(PrivateBackup(path))));
     }
 
     [Fact]
@@ -207,14 +213,20 @@ public sealed partial class MetadataCleaningTests
     public async Task Backup_DoesNotOverwritePreviousOriginal()
     {
         var path = Path.Combine(_tempDirectory, "repeat.docx");
+        using var profile = AppDataPaths.OverrideRootForTests(Path.Combine(_tempDirectory, "profile"));
         CreateDocx(path);
         var original = File.ReadAllBytes(path);
         var cleaner = new DocxCleaner();
         Assert.True((await cleaner.CleanAsync(path, new CleanOptions(Backup: true))).Success);
         Assert.True((await cleaner.CleanAsync(path, new CleanOptions(Backup: true))).Success);
-        Assert.Equal(original, File.ReadAllBytes(path + ".bak"));
-        Assert.True(File.Exists(path + ".2.bak"));
+        Assert.Equal(original, File.ReadAllBytes(PrivateBackup(path)));
+        Assert.True(File.Exists(PrivateBackup(path, "repeat (2).docx")));
+        Assert.Empty(Directory.GetFiles(_tempDirectory, "*.bak"));
     }
+
+    // Backups live in the private per-user folder: <profile>/Backups/<date>/<name>.
+    private string PrivateBackup(string path, string? name = null) =>
+        Directory.GetFiles(Path.Combine(_tempDirectory, "profile", "Backups"), name ?? Path.GetFileName(path), SearchOption.AllDirectories).Single();
 
     [Fact]
     public async Task Xlsx_ExternalFormulaFailurePreservesOriginal()
@@ -223,7 +235,7 @@ public sealed partial class MetadataCleaningTests
         CreateWorkbookArtifactXlsx(path);
         using (var document = SpreadsheetDocument.Open(path, true))
         {
-            var cell = document.WorkbookPart!.WorksheetParts.First().Worksheet.Descendants<S.Cell>().First();
+            var cell = document.WorkbookPart!.WorksheetParts.First().Worksheet!.Descendants<S.Cell>().First();
             cell.CellFormula = new S.CellFormula("[1]Sheet1!A1");
         }
         var original = File.ReadAllBytes(path);
@@ -250,14 +262,14 @@ public sealed partial class MetadataCleaningTests
                   <v:shape id="button"><x:ClientData ObjectType="Button" /></v:shape>
                 </xml>
                 """));
-            worksheet.Worksheet.AppendChild(new S.LegacyDrawing { Id = worksheet.GetIdOfPart(vml) });
+            worksheet.Worksheet!.AppendChild(new S.LegacyDrawing { Id = worksheet.GetIdOfPart(vml) });
         }
         var result = await new ExcelCleaner().CleanAsync(path, new CleanOptions());
         Assert.True(result.Success, result.Message);
         Assert.Contains("Button", ReadZipEntry(path, drawingPath));
         Assert.DoesNotContain("Note", ReadZipEntry(path, drawingPath));
         using var cleaned = SpreadsheetDocument.Open(path, false);
-        Assert.NotNull(cleaned.WorkbookPart!.WorksheetParts.First().Worksheet.GetFirstChild<S.LegacyDrawing>());
+        Assert.NotNull(cleaned.WorkbookPart!.WorksheetParts.First().Worksheet!.GetFirstChild<S.LegacyDrawing>());
     }
 
     [Fact]

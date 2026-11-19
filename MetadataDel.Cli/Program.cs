@@ -1,21 +1,13 @@
 using MetadataDel.Core.CommandLine;
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using MetadataDel.Core.Audit;
-using MetadataDel.Core.Cleaning;
-using MetadataDel.Core.Excel;
-using MetadataDel.Core.Pdf;
-using MetadataDel.Core.Word;
 using Microsoft.Win32;
 
 namespace MetadataDel.Cli;
 
 public static class Program
 {
-    private static bool _logEnabled;
-    private static readonly object LogLock = new();
-
     [STAThread]
     public static async Task<int> Main(string[] args)
     {
@@ -49,88 +41,22 @@ public static class Program
             Console.Error.WriteLine(ex.Message);
             return 2;
         }
-        _logEnabled = parsed.Log;
+        CliCleaningRunner.ExpireOldLogs();
         if (parsed.Audit) return RunAuditMode(parsed.Paths);
-        var options = parsed.Options;
-        var paths = parsed.Paths;
-        if (paths.Count == 0)
+        if (parsed.Paths.Count == 0)
         {
             PrintUsage();
             return 2;
         }
 
-        var services = BuildServiceProvider();
-        var results = new ConcurrentBag<bool>();
-        var parallelism = Math.Max(1, Environment.ProcessorCount);
-        using var semaphore = new SemaphoreSlim(parallelism);
-
-        var tasks = paths.Select(async path =>
-        {
-            await semaphore.WaitAsync();
-
-            try
-            {
-                if (!File.Exists(path))
-                {
-                    ReportFailure(path, "файл не найден");
-                    results.Add(false);
-                    return;
-                }
-
-                var cleaner = CleanerFactory.Resolve(path, services);
-                if (cleaner == null)
-                {
-                    ReportFailure(path, "расширение не поддерживается");
-                    results.Add(false);
-                    return;
-                }
-
-                var result = await cleaner.CleanAsync(path, options);
-                results.Add(result.Success);
-
-                if (!result.Success)
-                {
-                    ReportFailure(path, result.Message ?? "неизвестная ошибка при очистке");
-                    return;
-                }
-
-                var logPath = string.Equals(result.Path, path, StringComparison.OrdinalIgnoreCase)
-                    ? path
-                    : $"{path} -> {result.Path}";
-
-                if (!string.IsNullOrWhiteSpace(result.Message))
-                {
-                    WriteWarning($"[WARN] {logPath} :: {result.Message}");
-                    return;
-                }
-
-                if (_logEnabled)
-                {
-                    LogLine($"[OK]   {logPath}");
-                }
-            }
-            catch (Exception ex)
-            {
-                results.Add(false);
-                ReportFailure(path, ex.Message, ex);
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        });
-
-        await Task.WhenAll(tasks);
-
-        var total = results.Count;
-        var success = results.Count(x => x);
-        var summary = $"Итог: {success}/{total} файлов обработано успешно.";
-        if (_logEnabled)
-        {
-            LogLine(summary);
-        }
-
-        return results.All(x => x) ? 0 : (results.Any(x => x) ? 1 : 2);
+        using var cancellation = new CancellationTokenSource();
+        using var interrupt = CliCleaningRunner.CancelOnInterrupt(cancellation);
+        var runner = new CliCleaningRunner(parsed.Log, Console.Out, Console.Error);
+        var summary = await runner.RunAsync(parsed.Paths, parsed.Options, cancellation.Token);
+        // Explorer and "Send to" run this WinExe with --log and no console: say when something needs attention.
+        if (OperatingSystem.IsWindows() && parsed.Log && (summary.Partial > 0 || summary.Failed > 0))
+            ShellNotification.Show(summary);
+        return summary.ExitCode;
     }
 
     private static int? HandleMaintenanceMode(string[] args)
@@ -254,6 +180,11 @@ public static class Program
         {
             Console.WriteLine("Файлы приложения не найдены, удалять было нечего.");
         }
+
+        if (Directory.Exists(AppDataPaths.BackupsDirectory))
+        {
+            Console.WriteLine($"Резервные копии документов сохранены и не удалялись: {AppDataPaths.BackupsDirectory}");
+        }
     }
 
     private static void PrintDiagnostics(SelfInstaller.InstallationDiagnostics diagnostics)
@@ -268,70 +199,18 @@ public static class Program
 
     private static void PrintUsage()
     {
-        const string usage = "Использование: MetadataDel.exe [--backup[=on|off]] [--log] [--aggressive-pdf] [--wipe-fs|--wipe-fs-timestamps] <file1> <file2> ...\n" +
+        var usage = "Использование: MetadataDel.exe [--backup[=on|off]] [--log] [--aggressive-pdf] [--wipe-fs|--wipe-fs-timestamps] <file1> <file2> ...\n" +
                              "Дополнительно: --help | -h — показать справку\n" +
                              "Аудит: MetadataDel.exe --audit <file1> <file2> ...\n" +
                              "Служебные режимы Windows: --install | --uninstall | --install-shell | --uninstall-shell | --diagnostics\n" +
                              "Примеры:\n" +
                              "  MetadataDel.exe --log --backup=on file.pdf file.docx\n" +
-                             "  MetadataDel.exe --wipe-fs \"D:\\docs\"";
+                             "  MetadataDel.exe --wipe-fs \"D:\\docs\"\n" +
+                             "Коды завершения: 0 — все файлы очищены полностью; 1 — часть файлов не очищена полностью или завершилась ошибкой;\n" +
+                             "  2 — ни один файл не очищен; 130 — очистка прервана (Ctrl+C).\n" +
+                             $"Резервные копии: {AppDataPaths.BackupsDirectory}\n" +
+                             $"Журнал и пояснения к ошибкам: {AppDataPaths.LogsDirectory}";
         Console.Error.WriteLine(usage);
-    }
-
-    private static IServiceProvider BuildServiceProvider()
-    {
-        var services = new Dictionary<Type, object>
-        {
-            { typeof(PdfCleaner), new PdfCleaner() },
-            { typeof(DocxCleaner), new DocxCleaner() },
-            { typeof(ExcelCleaner), new ExcelCleaner() },
-            { typeof(MetadataDel.Core.Ole.OleDocumentCleaner), new MetadataDel.Core.Ole.OleDocumentCleaner() },
-        };
-
-        return new SimpleServiceProvider(services);
-    }
-
-    private static void WriteFailure(string message)
-    {
-        if (_logEnabled)
-        {
-            LogLine(message);
-        }
-        else
-        {
-            Console.Error.WriteLine(message);
-        }
-    }
-
-    private static void ReportFailure(string path, string reason, Exception? exception = null)
-    {
-        var reportPath = UserErrorReportWriter.TryWrite(path, reason, exception);
-        var suffix = reportPath == null ? string.Empty : $" Файл с пояснением: {reportPath}";
-        WriteFailure($"[FAIL] {path} :: {reason}.{suffix}");
-    }
-
-    private static void WriteWarning(string message)
-    {
-        if (_logEnabled)
-        {
-            LogLine(message);
-        }
-        else
-        {
-            Console.WriteLine(message);
-        }
-    }
-
-    private static void LogLine(string message)
-    {
-        try
-        {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MetadataDel", "logs");
-            Directory.CreateDirectory(dir);
-            var file = Path.Combine(dir, DateTime.UtcNow.ToString("yyyy-MM-dd") + ".log");
-            lock (LogLock) File.AppendAllText(file, DateTime.UtcNow.ToString("o") + " " + message + Environment.NewLine);
-        }
-        catch { }
     }
 
     private static int RunAuditMode(List<string> paths)
@@ -356,7 +235,7 @@ public static class Program
 
             try
             {
-                var audit = MetadataAuditService.Audit(path);
+                var audit = MetadataAuditService.AuditWithFileSystem(path);
                 if (!audit.HasSensitiveMetadata)
                 {
                     Console.WriteLine($"[CLEAN] {path} :: следов метаданных не найдено");
@@ -375,15 +254,6 @@ public static class Program
 
         return hadErrors ? 2 : (foundSensitiveMetadata ? 1 : 0);
     }
-}
-
-internal sealed class SimpleServiceProvider : IServiceProvider
-{
-    private readonly IReadOnlyDictionary<Type, object> _services;
-
-    public SimpleServiceProvider(IReadOnlyDictionary<Type, object> services) => _services = services;
-
-    public object? GetService(Type serviceType) => _services.TryGetValue(serviceType, out var service) ? service : null;
 }
 
 internal static class SelfInstaller
@@ -479,12 +349,13 @@ internal static class SelfInstaller
     }
 
     // Журналы содержат пути очищенных файлов, поэтому удаляются вместе с программой.
+    // Папка Backups с оригиналами документов не удаляется: это данные пользователя.
     private static void DeleteLogs()
     {
-        var appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), AppName);
+        var appData = AppDataPaths.DataDirectory;
         try
         {
-            var logs = Path.Combine(appData, "logs");
+            var logs = AppDataPaths.LogsDirectory;
             if (Directory.Exists(logs)) Directory.Delete(logs, recursive: true);
             var settings = Path.Combine(appData, "settings.json");
             if (File.Exists(settings)) File.Delete(settings);
@@ -513,8 +384,7 @@ internal static class SelfInstaller
         return Environment.ProcessPath?.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) == true;
     }
 
-    public static string LogsDirectory =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), AppName, "logs");
+    public static string LogsDirectory => AppDataPaths.LogsDirectory;
 
     public static InstallationDiagnostics GetDiagnostics() =>
         new(ShellExtensions, Array.Empty<string>());

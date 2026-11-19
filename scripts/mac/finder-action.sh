@@ -12,14 +12,23 @@ BIN="$HOME/.local/bin/metadatadel"
 CONFIG="$HOME/Library/Application Support/MetadataDel/command-path"
 if [ -f "$CONFIG" ]; then IFS= read -r BIN < "$CONFIG"; fi
 LOG_DIR="$HOME/Library/Logs/MetadataDel"
-LOG_FILE="$LOG_DIR/finder-action.log"
+LOG_FILE="$LOG_DIR/finder-action-$(date -u '+%Y-%m-%d').log"
 
 mkdir -p "$LOG_DIR"
+chmod 700 "$LOG_DIR" 2>/dev/null || true
+# Журналы содержат пути документов: храним 30 дней. Удаляются только собственные файлы с точным именем.
+/usr/bin/find "$LOG_DIR" -maxdepth 1 -type f \( -name 'finder-action-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].log' -o -name 'finder-action.log' \) -mtime +30 -delete 2>/dev/null || true
+
+# AppleScript string literal: escape backslashes first, then quotes.
+applescript_string() {
+  printf '%s' "$1" | /usr/bin/sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
 
 notify() {
-  local title="$1"
-  local message="$2"
-  /usr/bin/osascript -e "display notification \"${message//\"/\\\"}\" with title \"${title//\"/\\\"}\"" >/dev/null 2>&1 || true
+  local title message
+  title="$(applescript_string "$1")"
+  message="$(applescript_string "$2")"
+  /usr/bin/osascript -e "display notification \"$message\" with title \"$title\"" >/dev/null 2>&1 || true
 }
 
 {
@@ -41,13 +50,19 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 
-if "$BIN" --log --backup=on "$@" >>"$LOG_FILE" 2>&1; then
-  notify "$APP_NAME" "Метаданные удалены: $# объект(ов)."
+# "--": имена файлов, начинающиеся с "-", не должны читаться как параметры.
+if "$BIN" --log --backup=on -- "$@" >>"$LOG_FILE" 2>&1; then
+  notify "$APP_NAME" "Метаданные удалены: $# объект(ов). Копии оригиналов — в папке резервных копий MetadataDel."
   exit 0
 else
   status=$?
 fi
-message="Очистка завершилась с ошибкой. Журнал: $LOG_FILE"
+case "$status" in
+  # 1: часть файлов очищена не полностью (метаданные остались) или не обработана.
+  1) message="Очищено не полностью: в части файлов остались метаданные или произошла ошибка. Подробности: $LOG_DIR" ;;
+  130) message="Очистка прервана. Исходные файлы, которые не успели обработаться, не изменены." ;;
+  *) message="Очистка завершилась с ошибкой. Журнал и пояснения: $LOG_DIR" ;;
+esac
 echo "[ERR] exit=$status" >>"$LOG_FILE"
 notify "$APP_NAME" "$message"
 exit "$status"

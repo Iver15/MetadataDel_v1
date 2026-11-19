@@ -19,4 +19,11 @@ public sealed record CleanOptions(bool Backup = false, bool AggressivePdf = fals
 /// <summary>
 /// Результат очистки конкретного файла.
 /// </summary>
-public sealed record CleanResult(string Path, bool Success, string? Message = null);
+public sealed record CleanResult(string Path, bool Success, string? Message = null)
+{
+    /// <summary>
+    /// Файл записан, но часть метаданных удалить не удалось (зашифрованный или повреждённый фрагмент,
+    /// неподдерживаемая структура, остатки после проверки). Такой результат нельзя показывать как полную очистку.
+    /// </summary>
+    public bool Incomplete { get; init; }
+}

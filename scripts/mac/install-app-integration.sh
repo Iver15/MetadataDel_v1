@@ -11,7 +11,19 @@ mdel_check_finder_paths
 mdel_check_command_paths "$BIN_DIR" metadatadel
 mkdir -p "$BIN_DIR" "$SUPPORT" "$HOME/Library/Services"
 LOCK="$SUPPORT/install.lock"
-if ! mkdir "$LOCK" 2>/dev/null; then echo 'Настройка Finder уже выполняется.' >&2; exit 2; fi
+take_lock() { mkdir "$LOCK" 2>/dev/null && echo "$$" >"$LOCK/pid"; }
+if ! take_lock; then
+  # Блокировка от убитого процесса (SIGKILL, выключение питания) не должна навсегда запрещать настройку Finder.
+  owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  stale=0
+  if [[ "$owner" =~ ^[0-9]+$ ]]; then
+    kill -0 "$owner" 2>/dev/null || stale=1
+  elif [[ -n "$(find "$LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]]; then
+    stale=1
+  fi
+  if [[ "$stale" == 1 ]]; then rm -rf "$LOCK"; fi
+  if [[ "$stale" != 1 ]] || ! take_lock; then echo 'Настройка Finder уже выполняется.' >&2; exit 2; fi
+fi
 STAGE=""
 TARGETS=("$BIN_DIR/metadatadel" "$BIN_DIR/mdel" "$WORKFLOW" "$SUPPORT/finder-action.sh" "$SUPPORT/command-path" "$SUPPORT/desktop-version")
 MUTATING=0
@@ -26,6 +38,7 @@ finish() {
     echo 'Обновление не завершено. Предыдущая установка восстановлена.' >&2
   fi
   if [[ -n "$STAGE" ]]; then rm -rf "$STAGE"; fi
+  rm -f "$LOCK/pid"
   rmdir "$LOCK" 2>/dev/null || true
   exit "$result"
 }

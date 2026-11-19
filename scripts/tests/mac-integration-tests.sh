@@ -25,9 +25,16 @@ cmp "$WORK/previous" "$WORK/home/.local/bin/metadatadel"
 [[ "$(cat "$WORK/home/Library/Application Support/MetadataDel/desktop-version")" == 2.4.0 ]]
 [[ -e "$WORK/home/Library/Services/Удалить метаданные (MetadataDel).workflow/Contents/document.wflow" ]]
 printf 'document' > "$WORK/home/important.docx"
-printf 'backup' > "$WORK/home/important.docx.bak"
-HOME="$WORK/home" bash "$ROOT/scripts/mac/uninstall.sh"
+BACKUPS="$WORK/home/Library/Application Support/MetadataDel/Backups/2026-11-19"
+mkdir -p "$BACKUPS" "$WORK/home/Library/Logs/MetadataDel" "$WORK/home/.local/share/MetadataDel/logs"
+printf 'backup' > "$BACKUPS/important.docx"
+printf 'paths' > "$WORK/home/Library/Logs/MetadataDel/2026-11-19.log"
+printf 'paths' > "$WORK/home/.local/share/MetadataDel/logs/2026-11-19.log"
+output="$(HOME="$WORK/home" bash "$ROOT/scripts/mac/uninstall.sh")"
 [[ ! -e "$WORK/home/.local/bin/metadatadel" ]]
 [[ ! -e "$WORK/home/Library/Services/Удалить метаданные (MetadataDel).workflow" ]]
-[[ -f "$WORK/home/important.docx" && -f "$WORK/home/important.docx.bak" ]]
-echo 'Integration: fresh/reinstall/rollback/uninstall preservation PASS'
+[[ -f "$WORK/home/important.docx" && "$(cat "$BACKUPS/important.docx")" == backup ]]
+# Logs contain document paths and are removed; backups are user data and are kept and mentioned.
+[[ ! -e "$WORK/home/Library/Logs/MetadataDel" && ! -e "$WORK/home/.local/share/MetadataDel" ]]
+[[ "$output" == *"Резервные копии документов сохранены"* ]]
+echo 'Integration: fresh/reinstall/rollback/uninstall preservation (backups kept, logs removed) PASS'

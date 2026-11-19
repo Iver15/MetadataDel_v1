@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+using System.Xml;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using MetadataDel.Core.Cleaning;
@@ -8,9 +10,11 @@ namespace MetadataDel.Core.OpenXml;
 
 internal static class SpreadsheetPrivacySanitizer
 {
+    // fileSharing не удаляется целиком: в нём рекомендация «только для чтения» и пароль на запись;
+    // убирается только имя пользователя (см. SanitizeWorkbookXml).
     private static readonly HashSet<string> WorkbookPrivacyElements = new(StringComparer.OrdinalIgnoreCase)
     {
-        "absPath", "fileVersion", "fileSharing", "externalReferences", "smartTagPr", "smartTagTypes", "webPublishObjects",
+        "absPath", "fileVersion", "externalReferences", "smartTagPr", "smartTagTypes", "webPublishObjects",
         "revisionPtr"
     };
 
@@ -38,23 +42,16 @@ internal static class SpreadsheetPrivacySanitizer
 
         var keepExternalLinks = false;
         var workbookXml = OpenXmlPartXml.TryLoad(workbookPart);
-        var externalNames = workbookXml?.Descendants()
-            .Where(e => e.Name.LocalName == "definedName" && IsExternalReference(e.Value))
-            .Select(e => (string?)e.Attribute("name")).OfType<string>().ToList() ?? new List<string>();
-        foreach (var worksheet in workbookPart.WorksheetParts)
+        var hasExternalLinks = workbookPart.ExternalWorkbookParts.Any() ||
+                               workbookXml?.Descendants().Any(e => e.Name.LocalName == "externalReferences") == true;
+        var externalNames = FindExternalNames(workbookXml);
+        if (DependsOnExternalWorkbooks(workbookPart, hasExternalLinks, externalNames) || HasQueryTables(workbookPart))
         {
-            var xml = OpenXmlPartXml.TryLoad(worksheet);
-            if (xml?.Descendants().Any(e => e.Name.LocalName == "f" &&
-                (IsExternalReference(e.Value) || externalNames.Any(name =>
-                    System.Text.RegularExpressions.Regex.IsMatch(e.Value, @"(?<![\w.])" + System.Text.RegularExpressions.Regex.Escape(name) + @"(?![\w.])")))) == true ||
-                worksheet.QueryTableParts.Any())
-            {
-                if (context.Depth == 0)
-                    throw new NotSupportedException("Книга содержит формулы с внешними ссылками или таблицы запросов. Преобразуйте их в значения перед очисткой; исходный файл сохранён.");
-                // Во встроенной книге (данные диаграммы) формулы не проверить в Excel; ссылки оставляем рабочими.
-                context.Warn("Встроенная книга содержит внешние ссылки или таблицы запросов; пути к внешним источникам сохранены.");
-                keepExternalLinks = true;
-            }
+            if (context.Depth == 0)
+                throw new NotSupportedException("Книга содержит формулы с внешними ссылками или таблицы запросов. Преобразуйте их в значения перед очисткой; исходный файл сохранён.");
+            // Во встроенной книге (данные диаграммы) формулы не проверить в Excel; ссылки оставляем рабочими.
+            context.WarnIncomplete("Встроенная книга содержит внешние ссылки или таблицы запросов; пути к внешним источникам сохранены.");
+            keepExternalLinks = true;
         }
 
         // Сводные таблицы на внешних подключениях перестанут открываться, если удалить connections.xml.
@@ -63,12 +60,15 @@ internal static class SpreadsheetPrivacySanitizer
         {
             if (context.Depth == 0)
                 throw new NotSupportedException("Книга содержит сводные таблицы на внешних подключениях. Преобразуйте их в значения перед очисткой; исходный файл сохранён.");
-            context.Warn("Встроенная книга содержит внешние подключения; сведения о подключениях сохранены.");
+            context.WarnIncomplete("Встроенная книга содержит внешние подключения; сведения о подключениях сохранены.");
             keepExternalLinks = true;
         }
 
         foreach (var customXmlPart in workbookPart.CustomXmlParts.ToList())
         {
+            // Запросы Power Query хранятся в custom XML (DataMashup) и пропадают вместе с ним.
+            if (IsDataMashup(customXmlPart))
+                context.Warn("Удалены запросы Power Query (DataMashup): обновить данные из исходных источников в Excel больше нельзя.");
             workbookPart.DeletePart(customXmlPart);
         }
 
@@ -110,7 +110,7 @@ internal static class SpreadsheetPrivacySanitizer
             workbookPart.DeletePart(workbookPersonPart);
         }
 
-        OpenXmlPartXml.Update(workbookPart, xml => SanitizeWorkbookXml(xml, keepExternalLinks));
+        OpenXmlPartXml.Update(workbookPart, xml => SanitizeWorkbookXml(xml, keepExternalLinks, keepExternalLinks ? new HashSet<string>() : externalNames));
         SpreadsheetHiddenContent.RemoveUnreferencedHiddenSheets(workbookPart, context);
         if (SpreadsheetHiddenContent.FindDetachedPivotCaches(workbookPart, OpenXmlPartXml.TryLoad(workbookPart)).Count > 0)
         {
@@ -120,13 +120,17 @@ internal static class SpreadsheetPrivacySanitizer
         foreach (var chartsheetPart in workbookPart.ChartsheetParts)
         {
             var removedPrinterIds = DeletePrinterSettings(chartsheetPart, chartsheetPart.SpreadsheetPrinterSettingsParts);
-            if (removedPrinterIds.Count > 0)
-                OpenXmlPartXml.Update(chartsheetPart, xml => SanitizeWorksheetXml(xml, new HashSet<string>(), removedPrinterIds));
+            OpenXmlPartXml.Update(chartsheetPart, xml => SanitizeWorksheetXml(xml, new HashSet<string>(), removedPrinterIds));
         }
 
         foreach (var worksheetPart in workbookPart.WorksheetParts)
         {
             var removedPrinterIds = DeletePrinterSettings(worksheetPart, worksheetPart.SpreadsheetPrinterSettingsParts);
+            // Пользовательские свойства листа (customPr) — произвольные имена и значения от надстроек и пользователя.
+            foreach (var customProperty in worksheetPart.CustomPropertyParts.ToList())
+            {
+                worksheetPart.DeletePart(customProperty);
+            }
             var hadCommentArtifacts = worksheetPart.WorksheetCommentsPart != null || worksheetPart.WorksheetThreadedCommentsParts.Any();
 
             if (worksheetPart.WorksheetCommentsPart != null)
@@ -145,7 +149,19 @@ internal static class SpreadsheetPrivacySanitizer
                 foreach (var relationship in worksheetPart.Parts
                              .Where(p => p.OpenXmlPart.Uri.ToString().EndsWith(".vml", StringComparison.OrdinalIgnoreCase)).ToList())
                 {
-                    var drawing = OpenXmlPartXml.TryLoad(relationship.OpenXmlPart);
+                    XDocument? drawing;
+                    try
+                    {
+                        drawing = OpenXmlPartXml.TryLoad(relationship.OpenXmlPart);
+                    }
+                    catch (XmlException)
+                    {
+                        // Сторонние генераторы пишут VML, который не является корректным XML. Такую часть оставляем
+                        // как есть, чтобы не сорвать очистку всей книги.
+                        context.WarnIncomplete("Не удалось проверить рисунок примечаний (VML) на листе: его разметка повреждена, " +
+                                               "часть оставлена без изменений. В ней могут остаться имена авторов примечаний.");
+                        continue;
+                    }
                     if (drawing == null) continue;
                     var notes = drawing.Descendants().Where(e => e.Name.LocalName == "shape" &&
                         e.Descendants().Any(c => c.Name.LocalName == "ClientData" && (string?)c.Attribute("ObjectType") == "Note")).ToList();
@@ -166,6 +182,18 @@ internal static class SpreadsheetPrivacySanitizer
             OpenXmlPartXml.Update(worksheetPart, xml => SanitizeWorksheetXml(xml, removedDrawingIds, removedPrinterIds));
         }
 
+        foreach (var sheet in workbookPart.GetPartsOfType<MacroSheetPart>().Cast<OpenXmlPart>()
+                     .Concat(workbookPart.GetPartsOfType<InternationalMacroSheetPart>()).ToList())
+        {
+            foreach (var customProperty in sheet.GetPartsOfType<CustomPropertyPart>().ToList())
+            {
+                sheet.DeletePart(customProperty);
+            }
+            OpenXmlPartXml.Update(sheet, xml => SanitizeWorksheetXml(xml, new HashSet<string>(), new HashSet<string>()));
+        }
+
+        RemoveRevisionIdentifiersFromOtherParts(workbookPart);
+        SpreadsheetHiddenContent.PruneSharedStrings(workbookPart);
         OpenXmlPackageSanitizer.Sanitize(document, context);
     }
 
@@ -268,11 +296,27 @@ internal static class SpreadsheetPrivacySanitizer
                 findings.Add("служебные метаданные книги");
             }
 
+            if (workbookXml.Descendants().Any(e => e.Name.LocalName == "fileSharing" && e.Attribute("userName") != null))
+            {
+                findings.Add("имя пользователя в параметрах общего доступа книги");
+            }
+
             if (workbookXml.Descendants().Any(e => e.Name.LocalName == "definedName" &&
                                                   IsExternalReference(e.Value)))
             {
                 findings.Add("внешние defined names");
             }
+
+            if (workbookXml.Descendants().Any(e => e.Name.LocalName == "customWorkbookViews" ||
+                                                  e.Name.LocalName == "definedName" && CustomViewNamePattern.IsMatch((string?)e.Attribute("name") ?? "")))
+            {
+                findings.Add("пользовательские представления книги");
+            }
+        }
+
+        if (SpreadsheetHiddenContent.FindUnusedSharedStrings(workbookPart))
+        {
+            findings.Add("неиспользуемые строки в sharedStrings (текст удалённых ячеек)");
         }
 
         if (workbookPart.WorksheetParts.Any(p => p.WorksheetCommentsPart != null || p.WorksheetThreadedCommentsParts.Any()))
@@ -283,9 +327,9 @@ internal static class SpreadsheetPrivacySanitizer
         return findings.Count > 0;
     }
 
-    private static bool SanitizeWorkbookXml(XDocument document, bool keepExternalLinks)
+    private static bool SanitizeWorkbookXml(XDocument document, bool keepExternalLinks, HashSet<string> externalNames)
     {
-        var changed = false;
+        var changed = RemoveRevisionIdentifiers(document);
 
         foreach (var element in document.Descendants().Where(e => WorkbookPrivacyElements.Contains(e.Name.LocalName) &&
                      !(keepExternalLinks && e.Name.LocalName == "externalReferences")).ToList())
@@ -294,10 +338,28 @@ internal static class SpreadsheetPrivacySanitizer
             changed = true;
         }
 
-        foreach (var definedName in document.Descendants().Where(e => !keepExternalLinks && e.Name.LocalName == "definedName" &&
-                                                                      IsExternalReference(e.Value)).ToList())
+        // Параметры общего доступа: рекомендация «только для чтения» и пароль на запись остаются, имя того,
+        // кто зарезервировал книгу, удаляется.
+        foreach (var userName in document.Descendants().Where(e => e.Name.LocalName == "fileSharing")
+                     .Attributes().Where(a => a.Name == "userName").ToList())
+        {
+            userName.Remove();
+            changed = true;
+        }
+
+        // Внешние имена и скрытые имена пользовательских представлений (Z_<GUID>_.wvu.*: их области печати и фильтры).
+        foreach (var definedName in document.Descendants().Where(e => e.Name.LocalName == "definedName" &&
+                     (externalNames.Contains(DefinedNameKey(e)) || CustomViewNamePattern.IsMatch((string?)e.Attribute("name") ?? ""))).ToList())
         {
             definedName.Remove();
+            changed = true;
+        }
+
+        // Пользовательские представления: в их именах обычно имя пользователя («Иванов — личное представление»).
+        foreach (var element in document.Descendants().Where(e => e.Name.LocalName == "customWorkbookViews" ||
+                     e.Name.LocalName == "definedNames" && !e.HasElements).ToList())
+        {
+            element.Remove();
             changed = true;
         }
 
@@ -320,7 +382,15 @@ internal static class SpreadsheetPrivacySanitizer
 
     private static bool SanitizeWorksheetXml(XDocument document, HashSet<string> removedDrawingIds, HashSet<string> removedPrinterIds)
     {
-        var changed = false;
+        var changed = RemoveRevisionIdentifiers(document);
+
+        // Пользовательские представления листа (их имена — в workbook.xml) и ссылки на удалённые customProperty*.bin.
+        foreach (var element in document.Root?.Elements().Where(e => e.Name.LocalName is "customSheetViews" or "customProperties").ToList() ??
+                                new List<XElement>())
+        {
+            element.Remove();
+            changed = true;
+        }
 
         foreach (var attribute in document.Descendants().Where(e => e.Name.LocalName == "pageSetup")
                      .Attributes(XName.Get("id", RelationshipsNamespace)).Where(a => removedPrinterIds.Contains(a.Value)).ToList())
@@ -371,9 +441,253 @@ internal static class SpreadsheetPrivacySanitizer
         }
     }
 
-    private static bool IsExternalReference(string value) =>
-        System.Text.RegularExpressions.Regex.IsMatch(value, @"\[[^\]]+\][^!]*!", System.Text.RegularExpressions.RegexOptions.CultureInvariant)
-        || value.Contains("://", StringComparison.Ordinal);
+    private const string DataMashupNamespace = "http://schemas.microsoft.com/DataMashup";
+
+    // Скрытые имена пользовательских представлений: Z_<GUID с подчёркиваниями>_.wvu.PrintArea, .wvu.FilterData и т. п.
+    private static readonly Regex CustomViewNamePattern = new(
+        @"^Z_[0-9A-F]{8}_[0-9A-F]{4}_[0-9A-F]{4}_[0-9A-F]{4}_[0-9A-F]{12}_\.wvu\.",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // xr:uid, xr2:uid, xr3:uid, xr10:uidLastSave и т. п.: GUID-ы, по которым Office сопоставляет копии файла.
+    private static readonly Regex RevisionNamespacePattern = new(
+        @"^http://schemas\.microsoft\.com/office/spreadsheetml/\d{4}/revision\d*$", RegexOptions.CultureInvariant);
+
+    // Номер или имя книги в ссылке внутри кавычек: '[1]Мой лист'!A1, 'C:\папка\[Книга.xlsx]Лист'!A1.
+    private static readonly Regex QuotedWorkbookPattern = new(@"\[([^\[\]]*)\]", RegexOptions.CultureInvariant);
+
+    // Ячейки (f), условное форматирование (formula), проверка данных (formula1/2, xm:f), спарклайны и диаграммы (c:f, cx:f).
+    private static readonly HashSet<string> FormulaElements = new(StringComparer.Ordinal) { "f", "formula", "formula1", "formula2" };
+
+    private static readonly char[] StructuredReferenceChars = { '[', '#', '@', '\'' };
+
+    internal static bool IsRevisionNamespace(string namespaceName) => RevisionNamespacePattern.IsMatch(namespaceName);
+
+    /// <summary>Удаляет атрибуты xr:uid и подобные (они помечены mc:Ignorable, Excel создаёт их заново).</summary>
+    private static bool RemoveRevisionIdentifiers(XDocument document)
+    {
+        var attributes = document.Descendants().Attributes()
+            .Where(a => !a.IsNamespaceDeclaration && IsRevisionNamespace(a.Name.NamespaceName)).ToList();
+        foreach (var attribute in attributes)
+        {
+            attribute.Remove();
+        }
+        return attributes.Count > 0;
+    }
+
+    /// <summary>Идентификаторы правок в остальных частях книги: таблицы, сводные таблицы, таблицы запросов.</summary>
+    private static void RemoveRevisionIdentifiersFromOtherParts(WorkbookPart workbookPart)
+    {
+        foreach (var (_, part) in OpenXmlPackageSanitizer.Walk(workbookPart, new HashSet<OpenXmlPart>()))
+        {
+            if (part is WorksheetPart or ChartsheetPart or MacroSheetPart or InternationalMacroSheetPart or SharedStringTablePart) continue;
+            if (!part.ContentType.Contains("spreadsheetml", StringComparison.OrdinalIgnoreCase) ||
+                !OpenXmlPackageSanitizer.IsXmlContentType(part.ContentType)) continue;
+            try
+            {
+                OpenXmlPartXml.Update(part, RemoveRevisionIdentifiers);
+            }
+            catch (XmlException)
+            {
+                // Повреждённую часть не меняем; аудит сообщит об оставшихся идентификаторах.
+            }
+        }
+    }
+
+    private static bool IsDataMashup(OpenXmlPart part)
+    {
+        try
+        {
+            using var stream = part.GetStream(FileMode.Open, FileAccess.Read);
+            using var reader = XmlReader.Create(stream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit });
+            reader.MoveToContent();
+            return reader.NamespaceURI == DataMashupNamespace;
+        }
+        catch (XmlException)
+        {
+            return false;
+        }
+    }
+
+    // Таблицы запросов бывают привязаны к листу или к таблице (table*.xml → queryTable*.xml).
+    private static bool HasQueryTables(WorkbookPart workbookPart) =>
+        OpenXmlPackageSanitizer.Walk(workbookPart, new HashSet<OpenXmlPart>()).Any(p => p.Part is QueryTablePart);
+
+    /// <summary>
+    /// Формулы, которые сломаются после удаления связей с внешними книгами: в ячейках, условном форматировании,
+    /// проверке данных, спарклайнах и диаграммах книги, а также через удаляемые внешние имена.
+    /// </summary>
+    private static bool DependsOnExternalWorkbooks(WorkbookPart workbookPart, bool hasExternalLinks, HashSet<string> externalNames)
+    {
+        var namePattern = NameUsagePattern(externalNames.Select(NameOfKey));
+        if (!hasExternalLinks && namePattern == null) return false;
+        foreach (var (_, part) in OpenXmlPackageSanitizer.Walk(workbookPart, new HashSet<OpenXmlPart>()))
+        {
+            if (part is not (WorksheetPart or MacroSheetPart or InternationalMacroSheetPart or ChartPart or ExtendedChartPart)) continue;
+            foreach (var formula in FormulaTexts(part))
+            {
+                if (hasExternalLinks && IsExternalReference(formula) || namePattern?.IsMatch(MaskLiterals(formula)) == true) return true;
+            }
+        }
+        return false;
+    }
+
+    private static IEnumerable<string> FormulaTexts(OpenXmlPart part)
+    {
+        using var stream = part.GetStream(FileMode.Open, FileAccess.Read);
+        if (stream.Length == 0) yield break;
+        using var reader = XmlReader.Create(stream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit });
+        var current = "";
+        while (reader.Read())
+        {
+            switch (reader.NodeType)
+            {
+                case XmlNodeType.Element:
+                    current = reader.LocalName;
+                    break;
+                case XmlNodeType.EndElement:
+                    current = "";
+                    break;
+                case XmlNodeType.Text or XmlNodeType.CDATA when FormulaElements.Contains(current):
+                    yield return reader.Value;
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ключи (имя и область) внешних имён: ссылаются на другую книгу напрямую или через другие внешние имена.
+    /// </summary>
+    private static HashSet<string> FindExternalNames(XDocument? workbook)
+    {
+        var names = workbook?.Descendants().Where(e => e.Name.LocalName == "definedName").ToList() ?? new List<XElement>();
+        var external = names.Where(e => IsExternalReference(e.Value)).ToList();
+        // Имя, построенное на внешнем имени, после удаления последнего превратилось бы в #ИМЯ?.
+        for (var added = true; added;)
+        {
+            added = false;
+            var pattern = NameUsagePattern(external.Select(e => (string?)e.Attribute("name") ?? ""));
+            if (pattern == null) break;
+            foreach (var name in names.Except(external).Where(e => pattern.IsMatch(MaskLiterals(e.Value))).ToList())
+            {
+                external.Add(name);
+                added = true;
+            }
+        }
+        return external.Select(DefinedNameKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string DefinedNameKey(XElement definedName) =>
+        ((string?)definedName.Attribute("name") ?? "") + "\n" + ((string?)definedName.Attribute("localSheetId") ?? "");
+
+    private static string NameOfKey(string key) => key[..key.IndexOf('\n')];
+
+    private static Regex? NameUsagePattern(IEnumerable<string> names)
+    {
+        var escaped = names.Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Select(Regex.Escape).ToList();
+        if (escaped.Count == 0) return null;
+        return new Regex(@"(?<![\p{L}\p{N}_.\\?])(?:" + string.Join("|", escaped) + @")(?![\p{L}\p{N}_.\\?!\[])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>
+    /// Ссылка на другую книгу в сохранённой формуле: [1]Лист!A1, '[1]Мой лист'!A1, [1]!Имя, [1]Лист1:Лист3!A1,
+    /// а также с именем файла вместо номера ('C:\папка\[Книга.xlsx]Лист'!A1). [0] — сама книга. Строковые
+    /// константы ("https://...") и структурированные ссылки на таблицы (Таблица1[[#This Row],[Сумма]]) не считаются.
+    /// </summary>
+    internal static bool IsExternalReference(string formula)
+    {
+        for (var i = 0; i < formula.Length;)
+        {
+            switch (formula[i])
+            {
+                case '"':
+                    i = SkipQuoted(formula, i);
+                    break;
+                case '\'':
+                    var end = SkipQuoted(formula, i);
+                    if (end < formula.Length && formula[end] == '!')
+                    {
+                        var workbook = QuotedWorkbookPattern.Match(formula[(i + 1)..(end - 1)]);
+                        if (workbook.Success && workbook.Groups[1].Value != "0") return true;
+                    }
+                    i = end;
+                    break;
+                case '[':
+                    var close = MatchingBracket(formula, i);
+                    if (close < 0) return false;
+                    var content = formula[(i + 1)..close];
+                    var next = close + 1;
+                    while (next < formula.Length && (char.IsLetterOrDigit(formula[next]) || formula[next] is '_' or '.' or ':')) next++;
+                    if (next < formula.Length && formula[next] == '!' && content.Length > 0 && content != "0" &&
+                        content.IndexOfAny(StructuredReferenceChars) < 0) return true;
+                    i = close + 1;
+                    break;
+                default:
+                    i++;
+                    break;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Позиция после закрывающей кавычки (удвоенная кавычка — экранированная).</summary>
+    private static int SkipQuoted(string text, int start)
+    {
+        var quote = text[start];
+        for (var i = start + 1; i < text.Length; i++)
+        {
+            if (text[i] != quote) continue;
+            if (i + 1 < text.Length && text[i + 1] == quote)
+            {
+                i++;
+                continue;
+            }
+            return i + 1;
+        }
+        return text.Length;
+    }
+
+    private static int MatchingBracket(string text, int start)
+    {
+        var depth = 0;
+        for (var i = start; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '\'':
+                    i++; // экранирование в структурированных ссылках: Таблица1['[Код']]
+                    break;
+                case '[':
+                    depth++;
+                    break;
+                case ']':
+                    if (--depth == 0) return i;
+                    break;
+            }
+        }
+        return -1;
+    }
+
+    /// <summary>Заменяет пробелами строковые константы и имена листов в кавычках, чтобы искать в формуле только имена.</summary>
+    private static string MaskLiterals(string formula)
+    {
+        var chars = formula.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (chars[i] == '[')
+            {
+                var close = MatchingBracket(formula, i);
+                if (close < 0) break;
+                i = close;
+                continue;
+            }
+            if (chars[i] is not ('"' or '\'')) continue;
+            var end = SkipQuoted(formula, i);
+            for (var j = i + 1; j < end - 1; j++) chars[j] = ' ';
+            i = end - 1;
+        }
+        return new string(chars);
+    }
 
     private static bool HasText(string? value) => !string.IsNullOrWhiteSpace(value);
 }

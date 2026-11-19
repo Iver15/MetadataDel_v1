@@ -33,13 +33,13 @@ internal static class PackageResidueScanner
 
     private static readonly HashSet<string> ServiceElements = new(StringComparer.Ordinal)
     {
-        "rsids", "docVars", "attachedTemplate", "docId", "revisionPtr", "absPath", "fileVersion", "mailMerge"
+        "rsids", "rsid", "docVars", "attachedTemplate", "docId", "revisionPtr", "absPath", "fileVersion", "mailMerge"
     };
 
     private static readonly HashSet<string> RevisionElements = new(StringComparer.Ordinal)
     {
         "ins", "del", "moveFrom", "moveTo", "rPrChange", "pPrChange", "sectPrChange", "tblPrChange",
-        "trPrChange", "tcPrChange", "tblGridChange", "numberingChange"
+        "trPrChange", "tcPrChange", "tblGridChange", "numberingChange", "cellIns", "cellDel", "cellMerge", "tblPrExChange"
     };
 
     private static readonly HashSet<string> PopulatedAppProperties = new(StringComparer.Ordinal)
@@ -47,16 +47,22 @@ internal static class PackageResidueScanner
         "Company", "Manager", "Template", "HyperlinkBase", "Application", "AppVersion", "TotalTime"
     };
 
+    private const string SignatureDescription = "цифровая подпись (сертификат с именем и адресом подписавшего, время подписания)";
+
     public static void Scan(Stream package, ICollection<MetadataAuditFinding> findings) => Scan(package, findings, "", 0);
 
     private static void Scan(Stream package, ICollection<MetadataAuditFinding> findings, string prefix, int depth)
     {
         using var archive = new ZipArchive(package, ZipArchiveMode.Read, leaveOpen: true);
+        if (!string.IsNullOrEmpty(archive.Comment) || archive.Entries.Any(e => !string.IsNullOrEmpty(e.Comment)))
+            Add(findings, prefix, "zipComment", "комментарии ZIP-архива");
         foreach (var entry in archive.Entries)
         {
             var name = entry.FullName;
             if (name.EndsWith("/", StringComparison.Ordinal)) continue;
             var lower = name.ToLowerInvariant();
+            if (lower.StartsWith("_xmlsignatures/", StringComparison.Ordinal))
+                Add(findings, prefix, "signature", SignatureDescription);
 
             if (lower == "docprops/custom.xml") Add(findings, prefix, "custom", "пользовательские свойства документа");
             if (lower.StartsWith("docprops/thumbnail", StringComparison.Ordinal)) Add(findings, prefix, "thumbnail", "миниатюра документа");
@@ -65,6 +71,8 @@ internal static class PackageResidueScanner
             if (lower.Contains("/printersettings/")) Add(findings, prefix, "printer", "настройки принтера");
             if (lower.Contains("/revisions/")) Add(findings, prefix, "revisions", "журнал изменений общей книги");
             if (lower.Contains("pivotcacherecords")) Add(findings, prefix, "pivotRecords", "кэш исходных данных сводной таблицы");
+            if (lower.StartsWith("xl/", StringComparison.Ordinal) && lower.Contains("customproperty") && !lower.Contains("/_rels/"))
+                Add(findings, prefix, "sheetCustomProperties", "пользовательские свойства листа Excel");
 
             var data = Read(entry);
             if (ImageMetadata.HasMetadata(data))
@@ -111,6 +119,10 @@ internal static class PackageResidueScanner
             Add(findings, prefix, "app", "сведения о приложении, организации и шаблоне");
 
         if (name.EndsWith(".rels", StringComparison.Ordinal) && root.Elements().Any(e =>
+                ((string?)e.Attribute("Type") ?? "").Contains("/digital-signature/", StringComparison.OrdinalIgnoreCase)))
+            Add(findings, prefix, "signature", SignatureDescription);
+
+        if (name.EndsWith(".rels", StringComparison.Ordinal) && root.Elements().Any(e =>
                 (string?)e.Attribute("TargetMode") == "External" &&
                 ((string?)e.Attribute("Type") ?? "").EndsWith("/attachedTemplate", StringComparison.Ordinal)))
             Add(findings, prefix, "template", "ссылка на шаблон документа");
@@ -133,11 +145,29 @@ internal static class PackageResidueScanner
                     Add(findings, prefix, "identity", "имена пользователей в разметке");
                 else if (attributeName.StartsWith("rsid", StringComparison.Ordinal))
                     Add(findings, prefix, "rsid", "идентификаторы сеансов редактирования (rsid)");
-                else if (attributeName is "descr" or "title" or "href" or "alt" && OpenXmlPackageSanitizer.LooksLikeLocalPath(attribute.Value))
-                    Add(findings, prefix, "imagePath", "пути к исходным файлам изображений");
+                // То же правило, что и в очистке (OpenXmlPackageSanitizer.SanitizeDrawingAttributes).
+                else if (attributeName is "descr" or "title" or "href" or "alt" && OpenXmlPackageSanitizer.IsIdentifyingFileReference(attribute.Value) ||
+                         attributeName == "name" && local is "docPr" or "cNvPr" && OpenXmlPackageSanitizer.IsIdentifyingFileReference(attribute.Value))
+                    Add(findings, prefix, "imagePath", "пути и имена исходных файлов изображений");
                 else if (attributeName == "title" && local == "imagedata")
-                    Add(findings, prefix, "imagePath", "имена исходных файлов изображений");
+                    Add(findings, prefix, "imagePath", "пути и имена исходных файлов изображений");
             }
+        }
+
+        if (name.StartsWith("xl/", StringComparison.Ordinal)) ScanSpreadsheetXml(root, findings, prefix);
+    }
+
+    /// <summary>XLSX: идентификаторы правок (xr:uid), пользовательские представления и свойства листов.</summary>
+    private static void ScanSpreadsheetXml(XElement root, ICollection<MetadataAuditFinding> findings, string prefix)
+    {
+        foreach (var element in root.DescendantsAndSelf())
+        {
+            if (element.Name.LocalName is "customWorkbookViews" or "customSheetViews")
+                Add(findings, prefix, "customViews", "пользовательские представления Excel");
+            if (element.Name.LocalName == "customProperties" && element.Parent == root)
+                Add(findings, prefix, "sheetCustomProperties", "пользовательские свойства листа Excel");
+            if (element.Attributes().Any(a => !a.IsNamespaceDeclaration && SpreadsheetPrivacySanitizer.IsRevisionNamespace(a.Name.NamespaceName)))
+                Add(findings, prefix, "revisionUid", "идентификаторы правок Excel (xr:uid)");
         }
     }
 

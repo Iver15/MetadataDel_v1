@@ -95,7 +95,7 @@ public sealed class ResidualMetadataTests : IDisposable
         var audit = MetadataAuditService.Audit(path);
         Assert.False(audit.HasSensitiveMetadata, audit.Summarize(20));
         using var document = WordprocessingDocument.Open(path, false);
-        Assert.Contains("Visible text", document.MainDocumentPart!.Document.InnerText);
+        Assert.Contains("Visible text", document.MainDocumentPart!.Document!.InnerText);
         Assert.Single(document.MainDocumentPart.ImageParts);
         Assert.Single(document.MainDocumentPart.EmbeddedPackageParts);
         Assert.Single(document.MainDocumentPart.EmbeddedObjectParts);
